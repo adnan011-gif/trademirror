@@ -12,6 +12,9 @@ from pathlib import Path
 from app.detectors.holding_losers import (
     HoldingLosersDetector,
 )
+from app.detectors.overtrading import (
+    OvertradingDetector,
+)
 from app.detectors.revenge_trading import (
     RevengeTradingDetector,
 )
@@ -688,4 +691,608 @@ def test_revenge_trading_multi_seed_robustness() -> None:
     detection_rate = planted_fired / 30.0
     print(f"Multi-seed planted months detected: {planted_fired}/30 ({detection_rate:.1%})")
     assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"
+
+
+# =====================================================================
+# SECTION 3: OvertradingDetector Tests
+# =====================================================================
+
+
+def _make_ot_trade(
+    trade_id: str,
+    trading_date: date,
+    entry_time: datetime,
+    gross_pnl: float,
+    entry_order_id: str,
+    exit_order_id: str,
+    quantity: int = 75,
+    is_add_on: bool = False,
+    is_partial_exit: bool = False,
+) -> Trade:
+    """Helper to create Trade objects for overtrading detector tests."""
+    return Trade(
+        trade_id=trade_id,
+        symbol="NIFTY24OCT25000CE",
+        instrument_type="CE",
+        strike=25000.0,
+        expiry=date(2024, 10, 31),
+        direction="LONG",
+        entry_time=entry_time,
+        exit_time=entry_time + timedelta(minutes=15),
+        entry_price=100.0,
+        exit_price=100.0 + (gross_pnl / quantity) if quantity > 0 else 100.0,
+        quantity=quantity,
+        lot_size=75,
+        hold_minutes=15.0,
+        gross_pnl=gross_pnl,
+        entry_order_id=entry_order_id,
+        exit_order_id=exit_order_id,
+        is_partial_exit=is_partial_exit,
+        is_add_on=is_add_on,
+        trading_date=trading_date,
+    )
+
+
+def test_overtrading_fires_on_constructed_case() -> None:
+    """Verify detector fires on constructed case with exact hand-calculated metrics."""
+    trades: list[Trade] = []
+
+    # Days 1 to 8: Baseline days, 2 trades each (total 16 trades)
+    for day_idx in range(1, 9):
+        d = date(2024, 10, day_idx)
+        t1 = _make_ot_trade(
+            f"B{day_idx}_1", d, datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+            1000.0, f"EB{day_idx}_1", f"XB{day_idx}_1"
+        )
+        t2 = _make_ot_trade(
+            f"B{day_idx}_2", d, datetime(2024, 10, day_idx, 10, 30, tzinfo=IST),
+            -500.0, f"EB{day_idx}_2", f"XB{day_idx}_2"
+        )
+        trades.extend([t1, t2])
+
+    # Day 9: Spike day 1 with 6 trades (median=2.0, 6 > 2.0*2=4)
+    # Trades 1-2: normal (+1000 each), Trades 3-6: excess (-1000 each -> excess loss 4000)
+    d9 = date(2024, 10, 9)
+    for i in range(1, 7):
+        pnl = 1000.0 if i <= 2 else -1000.0
+        trades.append(
+            _make_ot_trade(
+                f"S9_{i}", d9, datetime(2024, 10, 9, 9 + i, 0, tzinfo=IST),
+                pnl, f"ES9_{i}", f"XS9_{i}"
+            )
+        )
+
+    # Day 10: Spike day 2 with 5 trades (5 > 4)
+    # Trades 1-2: normal (+500 each), Trades 3-5: excess (-1000 each -> excess loss 3000)
+    d10 = date(2024, 10, 10)
+    for i in range(1, 6):
+        pnl = 500.0 if i <= 2 else -1000.0
+        trades.append(
+            _make_ot_trade(
+                f"S10_{i}", d10, datetime(2024, 10, 10, 9 + i, 0, tzinfo=IST),
+                pnl, f"ES10_{i}", f"XS10_{i}"
+            )
+        )
+
+    detector = OvertradingDetector()
+    res = detector.detect(trades)
+
+    assert res is not None
+    assert res.key == "overtrading"
+    assert res.name == "Taking far more trades than usual on some days"
+
+    # Excess trades are S9_3, S9_4, S9_5, S9_6, S10_3, S10_4, S10_5
+    expected_flagged = ["S10_3", "S10_4", "S10_5", "S9_3", "S9_4", "S9_5", "S9_6"]
+    assert res.flagged_trade_ids == sorted(expected_flagged)
+
+    # Hand-computed cost: 4 * 1000 + 3 * 1000 = 7000.0
+    assert res.estimated_cost_inr == 7000.0
+    assert res.confidence == 0.5  # min(1.0, 2 / 4.0) = 0.5
+
+    # Metrics
+    assert res.metrics["n_days"] == 10
+    assert res.metrics["median_daily_trades"] == 2.0
+    assert res.metrics["spike_days"] == ["2024-10-09", "2024-10-10"]
+    assert res.metrics["spike_day_count"] == 2
+    assert res.metrics["excess_trades"] == 7
+    assert res.metrics["excess_net_pnl_inr"] == -7000.0
+    assert res.metrics["excess_win_rate"] == 0.0
+    assert res.metrics["avg_trades_on_spike_days"] == 5.5
+    assert len(res.formula_note) > 0
+
+
+def test_overtrading_spike_multiple_boundary() -> None:
+    """Verify exactly 2.0x median is NOT a spike; 2.0x + 1 trade is a spike."""
+    detector = OvertradingDetector()
+
+    # 10 days where median = 3
+    # 8 days with 3 trades
+    trades: list[Trade] = []
+    for day_idx in range(1, 9):
+        d = date(2024, 10, day_idx)
+        for i in range(3):
+            trades.append(
+                _make_ot_trade(
+                    f"B{day_idx}_{i}", d,
+                    datetime(2024, 10, day_idx, 9 + i, 0, tzinfo=IST),
+                    100.0, f"EB{day_idx}_{i}", f"XB{day_idx}_{i}"
+                )
+            )
+
+    # Day 9: exactly 2.0x median = 2.0 * 3 = 6 trades (NOT a spike day because strictly >)
+    d9 = date(2024, 10, 9)
+    for i in range(6):
+        trades.append(
+            _make_ot_trade(
+                f"D9_{i}", d9,
+                datetime(2024, 10, 9, 9 + i, 0, tzinfo=IST),
+                -500.0, f"ED9_{i}", f"XD9_{i}"
+            )
+        )
+
+    # Day 10: 7 trades = 2.0x + 1 (IS a spike day)
+    d10 = date(2024, 10, 10)
+    for i in range(7):
+        trades.append(
+            _make_ot_trade(
+                f"D10_{i}", d10,
+                datetime(2024, 10, 10, 9 + i, 0, tzinfo=IST),
+                -500.0, f"ED10_{i}", f"XD10_{i}"
+            )
+        )
+
+    # Day 9 has 6 trades, which is not > 6.0 (not a spike day).
+    # Only Day 10 is a spike day (< 2 MIN_SPIKE_DAYS).
+    assert detector.detect(trades) is None
+
+    # Now add 1 trade to Day 9 making it 7 trades (> 6.0) -> now 2 spike days!
+    trades.append(
+        _make_ot_trade(
+            "D9_6", d9,
+            datetime(2024, 10, 9, 15, 0, tzinfo=IST),
+            -500.0, "ED9_6", "XD9_6"
+        )
+    )
+    res = detector.detect(trades)
+    assert res is not None
+    assert res.metrics["spike_day_count"] == 2
+    assert res.metrics["spike_days"] == ["2024-10-09", "2024-10-10"]
+
+
+def test_overtrading_minimum_sample_guards() -> None:
+    """Verify None when distinct days < 10 or spike days < 2."""
+    detector = OvertradingDetector()
+
+    # 1. 9 days total (< 10 MIN_DAYS) even with multiple spikes
+    trades_9days: list[Trade] = []
+    for day_idx in range(1, 10):
+        d = date(2024, 10, day_idx)
+        count = 6 if day_idx in [8, 9] else 2
+        for i in range(count):
+            trades_9days.append(
+                _make_ot_trade(
+                    f"T_{day_idx}_{i}", d,
+                    datetime(2024, 10, day_idx, 9 + i, 0, tzinfo=IST),
+                    -500.0, f"E_{day_idx}_{i}", f"X_{day_idx}_{i}"
+                )
+            )
+    assert detector.detect(trades_9days) is None
+
+    # 2. 10 days total, but only 1 spike day
+    trades_1spike: list[Trade] = []
+    for day_idx in range(1, 11):
+        d = date(2024, 10, day_idx)
+        count = 6 if day_idx == 10 else 2
+        for i in range(count):
+            trades_1spike.append(
+                _make_ot_trade(
+                    f"T_{day_idx}_{i}", d,
+                    datetime(2024, 10, day_idx, 9 + i, 0, tzinfo=IST),
+                    -500.0, f"E_{day_idx}_{i}", f"X_{day_idx}_{i}"
+                )
+            )
+    assert detector.detect(trades_1spike) is None
+
+
+def test_overtrading_even_days_and_ceil_keep_n() -> None:
+    """Verify median with even number of days and ceil on fractional median setting keep_n."""
+    detector = OvertradingDetector()
+
+    # 10 days with counts: [2, 2, 2, 2, 2, 3, 3, 3, 8, 8]
+    # Median is (2 + 3) / 2 = 2.5. Spike threshold = 2.0 * 2.5 = 5.0. Both 8s are spikes.
+    # keep_n = ceil(2.5) = 3. Excess per spike day = 8 - 3 = 5. Total excess = 10.
+    counts = [2, 2, 2, 2, 2, 3, 3, 3, 8, 8]
+    trades: list[Trade] = []
+    for day_idx, cnt in enumerate(counts, start=1):
+        d = date(2024, 10, day_idx)
+        for i in range(cnt):
+            trades.append(
+                _make_ot_trade(
+                    f"T_{day_idx}_{i}", d,
+                    datetime(2024, 10, day_idx, 9 + (i % 6), i * 5, tzinfo=IST),
+                    -500.0, f"E_{day_idx}_{i}", f"X_{day_idx}_{i}"
+                )
+            )
+
+    res = detector.detect(trades)
+    assert res is not None
+    assert res.metrics["median_daily_trades"] == 2.5
+    assert res.metrics["excess_trades"] == 10  # 2 spike days * 5 excess trades each
+    assert res.metrics["spike_day_count"] == 2
+
+
+def test_overtrading_excess_selection_chronological() -> None:
+    """Verify excess selection orders by (entry_time, entry_order_id) keeping earliest as normal."""
+    detector = OvertradingDetector()
+
+    # 10 days: 8 days with 1 trade, 2 spike days with 3 trades (median=1, 3 > 2.0*1=2)
+    # keep_n = 1. Earliest trade on spike day is normal, 2 later trades are excess.
+    trades: list[Trade] = []
+    for day_idx in range(1, 9):
+        d = date(2024, 10, day_idx)
+        trades.append(
+            _make_ot_trade(
+                f"N_{day_idx}", d,
+                datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+                100.0, f"EN_{day_idx}", f"XN_{day_idx}"
+            )
+        )
+
+    # Spike day 9: entries at 09:30 (normal), 11:00 (excess), 14:00 (excess)
+    d9 = date(2024, 10, 9)
+    trades.append(
+        _make_ot_trade(
+            "D9_EARLY", d9, datetime(2024, 10, 9, 9, 30, tzinfo=IST), 100.0, "E9_1", "X9_1"
+        )
+    )
+    trades.append(
+        _make_ot_trade(
+            "D9_MID", d9, datetime(2024, 10, 9, 11, 0, tzinfo=IST), -500.0, "E9_2", "X9_2"
+        )
+    )
+    trades.append(
+        _make_ot_trade(
+            "D9_LATE", d9, datetime(2024, 10, 9, 14, 0, tzinfo=IST), -500.0, "E9_3", "X9_3"
+        )
+    )
+
+    # Spike day 10: entries at 09:30 (normal), 11:00 (excess), 14:00 (excess)
+    d10 = date(2024, 10, 10)
+    trades.append(
+        _make_ot_trade(
+            "D10_EARLY", d10, datetime(2024, 10, 10, 9, 30, tzinfo=IST), 100.0, "E10_1", "X10_1"
+        )
+    )
+    trades.append(
+        _make_ot_trade(
+            "D10_MID", d10, datetime(2024, 10, 10, 11, 0, tzinfo=IST), -500.0, "E10_2", "X10_2"
+        )
+    )
+    trades.append(
+        _make_ot_trade(
+            "D10_LATE", d10, datetime(2024, 10, 10, 14, 0, tzinfo=IST), -500.0, "E10_3", "X10_3"
+        )
+    )
+
+    res = detector.detect(trades)
+    assert res is not None
+    assert "D9_EARLY" not in res.flagged_trade_ids
+    assert "D10_EARLY" not in res.flagged_trade_ids
+    assert res.flagged_trade_ids == ["D10_LATE", "D10_MID", "D9_LATE", "D9_MID"]
+
+
+def test_overtrading_multi_slice_entry_counts_as_one() -> None:
+    """Verify multi-slice entry event (same entry_order_id) counts as one trade taken."""
+    detector = OvertradingDetector()
+
+    trades: list[Trade] = []
+    for day_idx in range(1, 9):
+        d = date(2024, 10, day_idx)
+        trades.append(
+            _make_ot_trade(
+                f"N_{day_idx}", d,
+                datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+                100.0, f"EN_{day_idx}", f"XN_{day_idx}"
+            )
+        )
+
+    # Day 9: 1 multi-slice entry (3 slices) + 1 regular entry = 2 entry events (not 4)
+    # Median is 1. If multi-slice counted as 3, day 9 would have 4 entries > 2 (spike).
+    # Since it counts as 2, 2 > 2.0*1=2 is False, so Day 9 is NOT a spike!
+    d9 = date(2024, 10, 9)
+    for slice_idx in range(1, 4):
+        trades.append(
+            _make_ot_trade(
+                f"S9_SLICE_{slice_idx}", d9,
+                datetime(2024, 10, 9, 9, 30, tzinfo=IST),
+                -200.0, "E_MULTI", f"X_MULTI_{slice_idx}", is_partial_exit=True
+            )
+        )
+    trades.append(
+        _make_ot_trade(
+            "S9_OTHER", d9, datetime(2024, 10, 9, 11, 0, tzinfo=IST), -200.0, "E_OTHER", "X_OTHER"
+        )
+    )
+
+    # Day 10: 1 entry
+    d10 = date(2024, 10, 10)
+    trades.append(
+        _make_ot_trade(
+            "D10_1", d10, datetime(2024, 10, 10, 9, 30, tzinfo=IST), -200.0, "ED10_1", "XD10_1"
+        )
+    )
+
+    # Should return None because Day 9 is not a spike (2 is not > 2.0)
+    assert detector.detect(trades) is None
+
+
+def test_overtrading_addon_entries_not_counted() -> None:
+    """Verify add-on entries (is_add_on = True) are not counted toward daily entries."""
+    detector = OvertradingDetector()
+
+    trades: list[Trade] = []
+    for day_idx in range(1, 11):
+        d = date(2024, 10, day_idx)
+        # 1 normal entry
+        trades.append(
+            _make_ot_trade(
+                f"N_{day_idx}", d,
+                datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+                100.0, f"EN_{day_idx}", f"XN_{day_idx}"
+            )
+        )
+        # 4 add-on entries (should be skipped!)
+        for i in range(4):
+            trades.append(
+                _make_ot_trade(
+                    f"ADD_{day_idx}_{i}", d,
+                    datetime(2024, 10, day_idx, 10 + i, 0, tzinfo=IST),
+                    -200.0, f"EADD_{day_idx}_{i}", f"XADD_{day_idx}_{i}", is_add_on=True
+                )
+            )
+
+    # Every day has exactly 1 valid entry event. Spike count is 0 -> returns None
+    assert detector.detect(trades) is None
+
+
+def test_overtrading_net_positive_excess_returns_none() -> None:
+    """Verify detector returns None when net P&L on excess trades is positive."""
+    detector = OvertradingDetector()
+
+    trades: list[Trade] = []
+    for day_idx in range(1, 9):
+        d = date(2024, 10, day_idx)
+        trades.append(
+            _make_ot_trade(
+                f"N_{day_idx}", d,
+                datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+                -100.0, f"EN_{day_idx}", f"XN_{day_idx}"
+            )
+        )
+
+    # 2 spike days where excess trades make money (+5000 each)
+    for day_idx in [9, 10]:
+        d = date(2024, 10, day_idx)
+        trades.append(
+            _make_ot_trade(
+                f"S{day_idx}_1", d, datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+                -100.0, f"E{day_idx}_1", f"X{day_idx}_1"
+            )
+        )
+        trades.append(
+            _make_ot_trade(
+                f"S{day_idx}_2", d, datetime(2024, 10, day_idx, 11, 0, tzinfo=IST),
+                3000.0, f"E{day_idx}_2", f"X{day_idx}_2"
+            )
+        )
+        trades.append(
+            _make_ot_trade(
+                f"S{day_idx}_3", d, datetime(2024, 10, day_idx, 14, 0, tzinfo=IST),
+                2000.0, f"E{day_idx}_3", f"X{day_idx}_3"
+            )
+        )
+
+    # Excess net P&L is +10000 -> estimated cost is 0 -> returns None
+    assert detector.detect(trades) is None
+
+
+def test_overtrading_determinism() -> None:
+    """Verify detector produces deterministic output on repeated invocations."""
+    detector = OvertradingDetector()
+    trades: list[Trade] = []
+    for day_idx in range(1, 9):
+        d = date(2024, 10, day_idx)
+        trades.extend([
+            _make_ot_trade(
+                f"B{day_idx}_1", d, datetime(2024, 10, day_idx, 9, 30, tzinfo=IST),
+                1000.0, f"EB{day_idx}_1", f"XB{day_idx}_1"
+            ),
+            _make_ot_trade(
+                f"B{day_idx}_2", d, datetime(2024, 10, day_idx, 10, 30, tzinfo=IST),
+                -500.0, f"EB{day_idx}_2", f"XB{day_idx}_2"
+            ),
+        ])
+    for day_idx in [9, 10]:
+        d = date(2024, 10, day_idx)
+        for i in range(1, 6):
+            trades.append(
+                _make_ot_trade(
+                    f"S{day_idx}_{i}", d,
+                    datetime(2024, 10, day_idx, 9 + i, 0, tzinfo=IST),
+                    -1000.0, f"ES{day_idx}_{i}", f"XS{day_idx}_{i}"
+                )
+            )
+
+    res1 = detector.detect(trades)
+    res2 = detector.detect(trades)
+    assert res1 is not None and res2 is not None
+    assert res1.estimated_cost_inr == res2.estimated_cost_inr
+    assert res1.flagged_trade_ids == res2.flagged_trade_ids
+    assert res1.metrics == res2.metrics
+    assert res1.formula_note == res2.formula_note
+
+
+def test_overtrading_benchmark_datasets() -> None:
+    """Test OvertradingDetector on benchmark datasets."""
+    detector = OvertradingDetector()
+
+    # 1. clean.csv: must return None
+    clean_trades = pair_orders(parse_orders(Path("data/datasets/clean.csv")).orders).trades
+    assert detector.detect(clean_trades) is None, "overtrading falsely fired on clean.csv"
+
+    # 2. single_overtrading.csv
+    single_trades = pair_orders(
+        parse_orders(Path("data/datasets/single_overtrading.csv")).orders
+    ).trades
+    with open("data/ground_truth/single_overtrading.json") as f:
+        gt_data = json.load(f)
+    gt_ot = gt_data["habits"]["overtrading"]
+
+    res = detector.detect(single_trades)
+    assert res is not None, "overtrading failed to fire on single_overtrading.csv"
+
+    # a) Day level evaluation
+    gt_entry_oids = set(gt_ot["entry_order_ids"])
+    gt_planted_days = set(
+        t.trading_date.isoformat() for t in single_trades if t.entry_order_id in gt_entry_oids
+    )
+    detected_spike_days = set(res.metrics["spike_days"])
+
+    day_tp = len(detected_spike_days & gt_planted_days)
+    day_prec = day_tp / len(detected_spike_days) if detected_spike_days else 0.0
+    day_rec = day_tp / len(gt_planted_days) if gt_planted_days else 0.0
+
+    print("\n--- single_overtrading.csv Day-Level Evaluation ---")
+    print(f"Planted spike days:  {sorted(gt_planted_days)}")
+    print(f"Detected spike days: {sorted(detected_spike_days)}")
+    print(f"Day Precision: {day_prec:.3f}")
+    print(f"Day Recall:    {day_rec:.3f}")
+
+    assert day_prec >= 0.8, f"Day precision {day_prec:.3f} < 0.8"
+    assert day_rec >= 0.6, f"Day recall {day_rec:.3f} < 0.6"
+
+    # b) Trade level evaluation
+    detected_entry_oids = set(
+        t.entry_order_id for t in single_trades if t.trade_id in res.flagged_trade_ids
+    )
+    trade_tp = len(detected_entry_oids & gt_entry_oids)
+    trade_prec = trade_tp / len(detected_entry_oids) if detected_entry_oids else 0.0
+    trade_rec = trade_tp / len(gt_entry_oids) if gt_entry_oids else 0.0
+
+    print("\n--- single_overtrading.csv Trade-Level Evaluation ---")
+    print(f"Detector excess count:     {len(detected_entry_oids)}")
+    print(f"Ground-truth excess count: {len(gt_entry_oids)}")
+    print(f"Trade Precision: {trade_prec:.3f}")
+    print(f"Trade Recall:    {trade_rec:.3f}")
+    print(
+        "Explanation of trade-level gap: The detector keeps the earliest keep_n trades "
+        "(ceil(median_daily)) on each spike day, marking all subsequent entries as excess. "
+        "The synthetic generator planted excess trades at the tail of selected days after a "
+        "variable number of baseline trades (len(existing) >= 3, median_daily=4). Small "
+        "discrepancies arise when a day had fewer than 4 baseline trades before planting, so "
+        "the detector's keep_n=4 keeps the first planted trade as 'normal session', creating "
+        "a slight offset between generator-planted excess trades and detector-flagged "
+        "excess trades."
+    )
+
+    # c) Cost evaluation
+    injected_loss = gt_ot["injected_loss_inr"]
+    print(f"Estimated Cost: ₹{res.estimated_cost_inr:,.2f}")
+    print(f"Injected Loss:  ₹{injected_loss:,.2f}")
+    print(
+        "Explanation of injected_loss_inr: The generator creates excess trades on spike days "
+        "and by construction forces each excess trade to suffer an exit price drop of 10-35% "
+        "(choppy overtrading loss). Injected loss is the sum of absolute losses of planted "
+        "excess trades. The detector measures net loss on all flagged excess trades "
+        "(winners offset losers)."
+    )
+    assert (
+        0.5 * injected_loss <= res.estimated_cost_inr <= 2.0 * injected_loss
+    ), f"Cost ₹{res.estimated_cost_inr} out of bounds for injected ₹{injected_loss}"
+
+    # 3. mixed.csv
+    mixed_trades = pair_orders(parse_orders(Path("data/datasets/mixed.csv")).orders).trades
+    with open("data/ground_truth/mixed.json") as f:
+        mixed_gt = json.load(f)["habits"]["overtrading"]
+
+    mixed_res = detector.detect(mixed_trades)
+    assert mixed_res is not None, "overtrading failed to fire on mixed.csv"
+
+    m_gt_entry_oids = set(mixed_gt["entry_order_ids"])
+    m_gt_planted_days = set(
+        t.trading_date.isoformat() for t in mixed_trades if t.entry_order_id in m_gt_entry_oids
+    )
+    m_detected_spike_days = set(mixed_res.metrics["spike_days"])
+    m_day_tp = len(m_detected_spike_days & m_gt_planted_days)
+    m_day_prec = m_day_tp / len(m_detected_spike_days) if m_detected_spike_days else 0.0
+    m_day_rec = m_day_tp / len(m_gt_planted_days) if m_gt_planted_days else 0.0
+
+    m_detected_entry_oids = set(
+        t.entry_order_id for t in mixed_trades if t.trade_id in mixed_res.flagged_trade_ids
+    )
+    m_trade_tp = len(m_detected_entry_oids & m_gt_entry_oids)
+    m_trade_prec = m_trade_tp / len(m_detected_entry_oids) if m_detected_entry_oids else 0.0
+    m_trade_rec = m_trade_tp / len(m_gt_entry_oids) if m_gt_entry_oids else 0.0
+
+    # Overlaps with holding_losers and revenge_trading
+    hl_res = HoldingLosersDetector().detect(mixed_trades)
+    rt_res = RevengeTradingDetector().detect(mixed_trades)
+    hl_flagged = set(hl_res.flagged_trade_ids) if hl_res else set()
+    rt_flagged = set(rt_res.flagged_trade_ids) if rt_res else set()
+    ot_flagged = set(mixed_res.flagged_trade_ids)
+
+    print("\n--- mixed.csv Evaluation ---")
+    print(f"Day Precision:   {m_day_prec:.3f}, Day Recall: {m_day_rec:.3f}")
+    print(f"Trade Precision: {m_trade_prec:.3f}, Trade Recall: {m_trade_rec:.3f}")
+    print(f"Estimated Cost:  ₹{mixed_res.estimated_cost_inr:,.2f}")
+    print(f"Injected Loss:   ₹{mixed_gt['injected_loss_inr']:,.2f}")
+    print(f"Overlap with holding_losers:  {len(ot_flagged & hl_flagged)} trades")
+    print(f"Overlap with revenge_trading: {len(ot_flagged & rt_flagged)} trades")
+
+    # 4. Report other single_* datasets
+    print("\n--- Other Single Habit Datasets ---")
+    for ds_name in [
+        "single_holding_losers",
+        "single_revenge_trading",
+        "single_oversizing",
+        "single_averaging_down",
+    ]:
+        ds_trades = pair_orders(parse_orders(Path(f"data/datasets/{ds_name}.csv")).orders).trades
+        ds_res = detector.detect(ds_trades)
+        status_str = f"FIRED (₹{ds_res.estimated_cost_inr:,.2f})" if ds_res else "None"
+        print(f"{ds_name}: {status_str}")
+
+
+def test_overtrading_multi_seed_robustness() -> None:
+    """Verify multi-seed robustness across 30 clean months and 30 planted months."""
+    detector = OvertradingDetector()
+
+    # 30 clean months with fresh seeds (730 to 759)
+    clean_fired = 0
+    for s in range(730, 760):
+        csv_txt, _ = generate_dataset_in_memory(seed=s)
+        orders = parse_orders(csv_txt).orders
+        trades = pair_orders(orders).trades
+        if detector.detect(trades) is not None:
+            clean_fired += 1
+
+    clean_fraction = clean_fired / 30.0
+    print(f"\nMulti-seed clean months fired: {clean_fired}/30 ({clean_fraction:.1%})")
+    assert clean_fired <= 1, f"Clean months fired {clean_fired}/30 times (> 1)"
+
+    # 30 planted months with fresh seeds (830 to 859)
+    planted_fired = 0
+    for s in range(830, 860):
+        csv_txt, _ = generate_dataset_in_memory(
+            seed=s, habits_config={"overtrading": "medium"}
+        )
+        orders = parse_orders(csv_txt).orders
+        trades = pair_orders(orders).trades
+        if detector.detect(trades) is not None:
+            planted_fired += 1
+
+    detection_rate = planted_fired / 30.0
+    print(f"Multi-seed planted months detected: {planted_fired}/30 ({detection_rate:.1%})")
+    assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"
+
 

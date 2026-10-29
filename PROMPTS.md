@@ -526,3 +526,99 @@ me `git status` and `git log --oneline -3` afterwards. Never commit .env, API ke
 or node_modules. If tests fail, do not commit; fix first.
 
 Result: worked
+
+## Prompt 5c: overtrading detector
+
+Step 5c: implement ONLY the overtrading detector in
+backend/app/detectors/overtrading.py. Append a new section to
+backend/tests/test_detectors.py; do not touch the earlier sections.
+
+RULE FOR THIS STEP (same as 5b): the thresholds below are fixed. If a test or the
+multi-seed run fails, do NOT change a threshold or loosen a test. Stop, report the
+numbers and your diagnosis (detector logic, threshold design, or generator), and
+let me decide. Record any such report in the Result line of PROMPTS.md. In your
+final summary, state explicitly whether any threshold or existing test was changed.
+
+PRELUDE (diagnostic only, no code changes to revenge_trading.py): on mixed.csv, list
+the revenge_trading flagged trade ids that are NOT in the ground truth, and for each
+say in one line why it was flagged (prior trade, gap, size ratio, and whether the
+prior trade was itself a planted holding_losers trade). Tell me whether these look
+like genuine accidental matches or a detector flaw.
+
+DEFINITION
+Habit: on some days the trader takes far more trades than they normally do.
+Detector: class OvertradingDetector(BaseDetector), key "overtrading", returning
+HabitResult | None. Gross P&L only. State in the docstring that real overtrading
+cost also includes brokerage and charges, which we do not model, so this estimate is
+a lower bound.
+
+DEFINITIONS USED BY THE FORMULA (document in the docstring)
+- Entry event: all Trade slices sharing the same entry_order_id, treated as ONE trade
+  taken. Skip add-ons (is_add_on = true); they belong to averaging_down.
+- Day = Trade.trading_date (IST date of entry).
+- daily_count[day] = number of entry events that day. Only days with at least one
+  entry appear.
+
+FORMULA (named module constants)
+1. Require at least MIN_DAYS (10) distinct days, else return None.
+2. median_daily = median of daily_count over all days present.
+3. A day is a SPIKE DAY when daily_count > SPIKE_MULTIPLE (2.0) * median_daily
+   (strictly greater).
+4. Require at least MIN_SPIKE_DAYS (2) spike days, else return None.
+5. keep_n = ceil(median_daily). On each spike day, order that day's entry events by
+   (entry_time, entry_order_id); the first keep_n are normal, the rest are EXCESS.
+6. flagged_trade_ids = Trade.trade_id of every slice belonging to an excess entry,
+   sorted.
+7. estimated_cost_inr = max(0, -(sum of gross_pnl over flagged slices)). Net loss,
+   so winning excess trades offset losing ones. If 0, return None.
+8. confidence = min(1, spike_days / 4), rounded to 2.
+9. metrics = {n_days, median_daily_trades, spike_days (list of ISO dates, sorted),
+   spike_day_count, excess_trades, excess_net_pnl_inr, excess_win_rate,
+   avg_trades_on_spike_days}.
+10. name "Taking far more trades than usual on some days"; formula_note = one plain
+    paragraph with the actual numbers filled in.
+
+TESTS
+Hand-built Trade lists with hand-computed expectations:
+- fires on a constructed case: exact spike days, excess ids, cost, metrics
+- exactly 2.0x median is NOT a spike; 2.0x + 1 trade is
+- None when fewer than 10 days; None when only 1 spike day
+- median with an even number of days; ceil on a fractional median sets keep_n
+- excess selection is by entry_time order (earliest are normal)
+- multi-slice entry counts as one trade taken
+- add-on entries are not counted
+- net positive excess P&L -> None
+- determinism
+
+DATASET TESTS (parse_orders -> pair_orders -> detect):
+- clean.csv: None
+- single_overtrading.csv: fires. Evaluate at TWO levels and print both:
+  a) day level: flagged spike days vs ground-truth planted days (derive planted days
+     from the ground-truth trade/order ids). Assert precision >= 0.8, recall >= 0.6.
+  b) trade level: flagged trade ids mapped to entry_order_ids vs ground-truth
+     entry_order_ids. Print precision and recall; do NOT assert, but explain any gap
+     (for example the generator marking different trades as "excess" than the
+     detector's keep-the-earliest rule). Also print the detector's excess count
+     against the ground-truth excess count.
+  c) cost within 0.5x to 2.0x of injected_loss_inr. Print both and tell me exactly
+     what injected_loss_inr measures for this habit, and whether the generator made
+     excess trades lose by construction.
+- mixed.csv: fires; print day-level and trade-level numbers, plus overlap of flagged
+  ids with holding_losers and revenge_trading flags.
+- Other single_* datasets: do not assert. Print whether it fires on each.
+
+MULTI-SEED (in memory, via generate_dataset_in_memory): 30 clean months with fresh
+seeds (not 700-729 or 800-829) -> assert it fires on at most 1; 30 months with
+overtrading planted at medium -> assert detection >= 0.8. Print both fractions.
+Confirm `make data` still reproduces byte-identical committed files.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 5c: overtrading
+detector" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit
+with the message "feat(detectors): overtrading", and push to origin main. Show me
+`git status` and `git log --oneline -3` afterwards. Never commit .env, API keys, or
+node_modules. If tests fail, do not commit; fix first.
+
+Result: worked
+

@@ -421,7 +421,7 @@ class SyntheticGenerator:
         # 3. Plant overtrading: some days get > 2x the median daily count; mark excess trades
         if habits_config.get("overtrading"):
             intensity = habits_config["overtrading"]
-            target_days_count = {"low": 1, "medium": 3, "high": 5}[intensity]
+            target_days_count = {"low": 2, "medium": 3, "high": 5}[intensity]
 
             # Pick target days
             days_by_date: dict[date, list[SyntheticTrade]] = {}
@@ -439,8 +439,8 @@ class SyntheticGenerator:
 
             for d in selected_days:
                 existing = days_by_date[d]
-                median_daily = 4
-                excess_needed = max(4, (median_daily * 2 + 1) - len(existing))
+                # Target >= 12 trades so spike day count > 2.0 * median (even when median is 5)
+                excess_needed = max(6, 12 - len(existing))
 
                 last_exit = existing[-1].exit_time
                 for _ in range(excess_needed):

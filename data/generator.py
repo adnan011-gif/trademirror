@@ -15,6 +15,7 @@ import json
 import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Any, Literal
 
@@ -791,6 +792,23 @@ DATASET_SPECIFICATIONS: dict[str, dict[str, Any]] = {
         "messy": True,
     },
 }
+
+
+def generate_dataset_in_memory(
+    seed: int,
+    habits_config: dict[str, Intensity | None] | None = None,
+    messy: bool = False,
+    name: str = "in_memory",
+) -> tuple[str, dict[str, Any]]:
+    """Generate in-memory CSV text and ground truth for testing/evaluations."""
+    gen = SyntheticGenerator(seed=seed)
+    orders, gt = gen.generate_dataset(name=name, habits_config=habits_config, messy=messy)
+    out = StringIO()
+    writer = csv.DictWriter(out, fieldnames=CANONICAL_COLUMNS)
+    writer.writeheader()
+    for o in orders:
+        writer.writerow(o.to_csv_dict())
+    return out.getvalue(), gt
 
 
 def write_dataset_files(

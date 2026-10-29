@@ -352,3 +352,92 @@ Make sure the ground-truth tests actually ran. They should be passing tests, not
 The commit message should be exactly feat(pairing): FIFO round-trip trade matching.
 
 Result: worked
+
+## Prompt 5a: holding_losers detector
+
+Step 5a: implement ONLY the holding_losers detector in
+backend/app/detectors/holding_losers.py, with tests in
+backend/tests/test_detectors.py (keep that file organised per detector so later
+steps append sections).
+
+FIRST, before writing code: in your plan, tell me what changed in data/generator.py
+in the last commit, and whether any committed dataset or ground-truth file other
+than messy.* changed as a result. If others changed, list them.
+
+DEFINITION
+Habit: the trader holds losing trades far longer than winning trades.
+Detector: class HoldingLosersDetector(BaseDetector), key "holding_losers", returning
+HabitResult | None. Uses gross_pnl only (state in the docstring that charges are
+excluded). Trades with gross_pnl == 0 are neither winners nor losers.
+
+FORMULA (document in the docstring; thresholds as named module constants)
+1. winners = trades with pnl > 0; losers = trades with pnl < 0.
+   Require len(winners) >= MIN_WINNERS (5) and len(losers) >= MIN_LOSERS (5),
+   otherwise return None.
+2. median_winner_hold = median hold_minutes of winners.
+3. flagged = losers with hold_minutes > HOLD_MULTIPLE (2.0) * median_winner_hold.
+4. Effect-size guard (to avoid firing on noise): return None unless
+   len(flagged) >= MIN_FLAGGED (3) AND the median hold of losers >=
+   MEDIAN_RATIO_MIN (1.5) * median_winner_hold.
+5. baseline_loss = median |pnl| of NON-flagged losers; if there are fewer than 3
+   non-flagged losers, use the median |pnl| of all losers.
+6. estimated_cost_inr = sum over flagged losers of max(0, |pnl| - baseline_loss).
+   (Meaning: the extra loss beyond what this trader loses on a normal losing trade.)
+   If the total is <= 0, return None.
+7. confidence in [0, 1]: min(1, len(flagged) / 10) * min(1, (median_loser_hold /
+   median_winner_hold - 1) / 2). Document it plainly.
+8. HabitResult fields: key "holding_losers"; name "Holding losing trades too long";
+   flagged_trade_ids (Trade.trade_id values, sorted); estimated_cost_inr rounded to
+   2 decimals; confidence rounded to 2; metrics = {n_winners, n_losers,
+   median_winner_hold_min, median_loser_hold_min, hold_ratio, flagged_count,
+   baseline_loss_inr}; formula_note = one plain-English paragraph a trader could
+   read, stating the numbers used.
+Partial-exit slices are treated as separate trades; say so in a docstring comment.
+Keep the thresholds in named constants. Do not tune them on mixed.csv.
+
+TESTS
+Unit tests with hand-built Trade lists (hand-compute expected cost):
+- fires on a constructed case; exact cost, flagged ids, and metrics asserted
+- None when fewer than 5 winners, and when fewer than 5 losers
+- None when losers are held about as long as winners
+- None when flagged count < 3, and when the median ratio < 1.5
+- fewer than 3 non-flagged losers uses the all-losers baseline
+- zero-pnl trades are ignored
+- cost never negative; result is deterministic
+
+DATASET TESTS (parse_orders -> pair_orders -> detect):
+- clean.csv: returns None (assert).
+- single_holding_losers.csv and mixed.csv: fires (assert). For
+  single_holding_losers compute against ground truth, mapping flagged trades to
+  entry_order_ids: precision >= 0.8 and recall >= 0.6. Print precision, recall,
+  estimated cost, and ground-truth injected_loss_inr for both datasets.
+- Cost sanity: assert estimated_cost is within 0.5x to 2.0x of the ground-truth
+  injected_loss_inr on single_holding_losers. If it is outside that band, do NOT
+  widen it: report the numbers and tell me whether the formula or the generator's
+  injected_loss_inr is the problem.
+- The other single_* datasets: do not assert. Print whether the detector fires on
+  each and report it to me.
+
+MULTI-SEED ROBUSTNESS (not committed as files): use the generator's functions to
+build 30 clean-trader months with seeds different from the committed one, run the
+full pipeline in memory, and assert the detector fires on at most 1 of the 30. Also
+generate 30 months with holding_losers planted at medium intensity and report the
+fraction detected (assert >= 0.8). If the generator lacks a callable for this, add
+a small public function that returns (orders, ground_truth) for a seed and config,
+without changing existing outputs. Confirm `make data` still reproduces
+byte-identical committed files.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 5a: holding_losers
+detector" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit
+with the message "feat(detectors): holding_losers", and push to origin main. Show
+me `git status` and `git log --oneline -3` afterwards. Never commit .env, API keys,
+or node_modules. If tests fail, do not commit; fix first.
+What to check after it runs
+Its report on the generator change. Only messy.* should have changed. If other datasets changed, ask why before accepting.
+The printed precision, recall, and cost numbers. These are what you’ll quote in your evals and interview, so write them down.
+The multi-seed results. The clean month should fire at most once in 30, and the planted month should be detected in at least 24 of 30. If either fails, the thresholds need revisiting, not the test.
+The other single-habit datasets. Note which ones, if any, trigger holding_losers. A revenge-trading month can legitimately produce long-held losers as a side effect, so a hit there isn’t necessarily a bug, but you should know about it.
+
+Result: worked

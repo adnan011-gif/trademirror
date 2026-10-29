@@ -695,9 +695,23 @@ class SyntheticGenerator:
 
         # 2. Rows with missing price (price = None) (e.g. 2 orders)
         missing_count = 2
-        missing_candidates = self.rng.sample(messy_orders, missing_count)
-        for target in missing_candidates:
-            target.price = None
+        for _ in range(missing_count):
+            base_order = self.rng.choice(orders)
+            mis_time = base_order.timestamp + timedelta(seconds=self.rng.randint(1, 10))
+            mis_order = SyntheticOrder(
+                order_id=self._next_order_id(),
+                timestamp=mis_time,
+                symbol=base_order.symbol,
+                instrument_type=base_order.instrument_type,
+                strike=base_order.strike,
+                expiry=base_order.expiry,
+                side=base_order.side,
+                quantity=base_order.quantity,
+                lot_size=base_order.lot_size,
+                price=None,
+                status="COMPLETE",
+            )
+            messy_orders.append(mis_order)
 
         # 3. Status = REJECTED rows (e.g., 4 rejected orders)
         rejected_count = 4

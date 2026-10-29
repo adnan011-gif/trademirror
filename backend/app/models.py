@@ -1,4 +1,4 @@
-"""Core domain dataclasses for orders, paired round-trip trades, and habits."""
+"""Core domain dataclasses for orders, paired round-trip trades, open positions, and habits."""
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -28,15 +28,50 @@ class Trade:
 
     trade_id: str
     symbol: str
+    instrument_type: str
+    strike: float
+    expiry: date
+    direction: str  # "LONG" or "SHORT"
     entry_time: datetime
     exit_time: datetime
-    duration_minutes: float
-    side: str
-    quantity: int
     entry_price: float
     exit_price: float
-    pnl_inr: float
-    order_ids: list[str] = field(default_factory=list)
+    quantity: int
+    lot_size: int
+    hold_minutes: float
+    gross_pnl: float
+    entry_order_id: str
+    exit_order_id: str
+    is_partial_exit: bool
+    is_add_on: bool
+    trading_date: date
+
+    @property
+    def pnl_inr(self) -> float:
+        """Alias for gross_pnl in INR."""
+        return self.gross_pnl
+
+    @property
+    def order_ids(self) -> list[str]:
+        """List of order IDs involved in this trade."""
+        return [self.entry_order_id, self.exit_order_id]
+
+
+@dataclass(frozen=True)
+class OpenPosition:
+    """Represents an unclosed position lot remaining at the end of the order history."""
+
+    symbol: str
+    instrument_type: str
+    strike: float
+    expiry: date
+    direction: str  # "LONG" or "SHORT"
+    quantity: int
+    lot_size: int
+    entry_price: float
+    entry_time: datetime
+    entry_order_id: str
+    is_add_on: bool
 
 
 @dataclass(frozen=True)

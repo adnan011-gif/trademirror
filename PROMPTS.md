@@ -269,3 +269,86 @@ origin main. Show me `git status` and `git log --oneline -3` afterwards. Never
 commit .env, API keys, or node_modules. If tests fail, do not commit; fix first.
 
 Result: worked
+
+## Prompt 4: FIFO round-trip pairing
+
+Step 4: implement pairing in backend/app/pairing.py, with tests in
+backend/tests/test_pairing.py (replace the skipped placeholder). Extend the Trade
+model in app/models.py as needed.
+
+PUBLIC API
+pair_orders(orders: list[Order]) -> PairingResult
+PairingResult has: trades (list[Trade], closed round-trips only), open_positions
+(list[OpenPosition], anything still open at the end of the data), and anomalies
+(list of human-readable strings).
+
+MATCHING RULES
+- Position key = (symbol, instrument_type, strike, expiry). Match FIFO within a key.
+- A BUY first opens a long; a SELL first opens a short. Opposite-side orders close
+  existing lots oldest-first.
+- Partial exits: an exit larger than the oldest lot consumes lots in order and emits
+  one Trade per matched lot slice, so one SELL can produce several Trades.
+  Add-ons (a second BUY while long) create a separate lot, so an exit against two
+  lots yields two Trades.
+- Position flips: if an order is larger than the open opposite position, close it
+  fully and open a new position on the other side with the remainder.
+- Gross P&L only (no brokerage, taxes, or charges): long = (exit - entry) * qty,
+  short = (entry - exit) * qty. State this in the module docstring.
+- Open positions at the end are NOT trades. Report them in open_positions and add an
+  anomaly line. They must never feed P&L.
+
+TRADE FIELDS (all required)
+trade_id (deterministic: "P0001", "P0002"... assigned after sorting by exit_time,
+then entry_time, then entry_order_id), symbol, instrument_type, strike, expiry,
+direction (LONG/SHORT), entry_time, exit_time, entry_price, exit_price, quantity,
+lot_size, hold_minutes (float), gross_pnl, entry_order_id, exit_order_id,
+is_partial_exit (bool), is_add_on (bool: the entry lot was opened while another
+lot on the same key was already open), trading_date (IST date of entry).
+
+INVARIANTS (enforce in code where cheap, and in tests)
+1. Quantity conservation per key: total opened = total closed + total still open.
+2. Cash-flow identity: sum(trade.gross_pnl) + realised value of nothing else =
+   sum over matched quantities of (sell price - buy price) * qty. Test this
+   independently by recomputing from raw orders.
+3. hold_minutes >= 0 and exit_time >= entry_time for every trade.
+4. No trade has quantity <= 0.
+5. Pairing is deterministic: same orders in, identical output (ids and order).
+6. Orders arriving unsorted are handled (sort internally by timestamp, order_id).
+
+TESTS
+- Simple round trip (hand-computed P&L).
+- Partial exit: BUY 150, SELL 50, SELL 100 -> two trades, second not partial.
+- One SELL closing two separate lots (add-on case) -> two trades with correct
+  per-lot entry prices; check is_add_on.
+- Short-then-cover.
+- Position flip: long 100, SELL 250 -> closes the long, opens a short of 150.
+- Open position at month end -> in open_positions, absent from trades, anomaly
+  present.
+- Interleaved scrips: orders for three keys mixed together pair independently.
+- Determinism and unsorted-input tests.
+- GROUND-TRUTH TESTS against data/datasets + data/ground_truth, after parsing with
+  parse_orders:
+  a) every dataset: invariants 1-4 hold, and open_positions is empty (the
+     generator closes everything).
+  b) for each habit with planted: true, every entry_order_id and exit_order_id in
+     the ground truth appears in some paired Trade's entry_order_id/exit_order_id.
+  c) clean.csv: the number of paired trades equals the number of generator trades.
+  d) single_averaging_down.csv: every ground-truth add-on entry order maps to a
+     Trade with is_add_on = true.
+  If any of these fail, do not loosen the test: tell me whether the pairing logic
+  or the generator's ground truth is wrong, with the specific order IDs.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 4: FIFO round-trip
+pairing" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit
+with the message "feat(pairing): FIFO round-trip trade matching", and push to
+origin main. Show me `git status` and `git log --oneline -3` afterwards. Never
+commit .env, API keys, or node_modules. If tests fail, do not commit; fix first.
+What to check after it runs
+Recompute one trade by hand. Pick a trade from clean.csv, find its two orders, and check that (exit - entry) * quantity equals gross_pnl.
+Look at the averaging-down case. In single_averaging_down.csv, find a position with two buys and one sell. Confirm that it produced two Trades and that the add-on one is flagged.
+Make sure the ground-truth tests actually ran. They should be passing tests, not skipped ones. Ask Antigravity how many parametrized cases ran if the count looks low.
+The commit message should be exactly feat(pairing): FIFO round-trip trade matching.
+
+Result: worked

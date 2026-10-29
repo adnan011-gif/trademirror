@@ -206,3 +206,66 @@ main. Show me `git status` and `git log --oneline -3` afterwards. Never commit
 .env, API keys, or node_modules. If tests fail, do not commit; fix first.
 
 Result: worked
+
+## Prompt 3: Ingestion and validation
+
+Step 3: implement ingestion in backend/app/parsers/orders_csv.py, with tests in
+backend/tests/test_parsers.py (replace the skipped placeholder). Use the Order model
+from app/models.py (extend it only if a field is missing).
+
+SCHEMA
+Canonical columns, exactly: order_id, timestamp, symbol, instrument_type, strike,
+expiry, side, quantity, lot_size, price, status.
+- Missing or extra required columns -> raise IngestError with a message naming the
+  missing/unexpected columns. Column order does not matter; header matching is
+  case-insensitive and whitespace-trimmed.
+- Empty file, or header only -> raise IngestError("no orders found").
+- Wrong file type or undecodable bytes -> IngestError with a clear message.
+
+PUBLIC API
+parse_orders(source: str | Path | bytes | IO) -> IngestResult
+IngestResult has: orders (list[Order], cleaned, sorted ascending by timestamp, ties
+broken by order_id), warnings (list[IngestWarning]), and counts (dict with raw_rows,
+kept, duplicates, rejected, missing_price, invalid).
+IngestWarning has: code, row_number (1-based, excluding header), order_id (if known),
+message. Warnings are collected, never raised; one bad row must not crash the parse.
+
+ROW RULES — classify every row exactly once, in this precedence:
+1. duplicate: the row is an exact duplicate of an earlier row (all fields equal).
+   Keep the first, drop later ones.
+2. rejected: status is anything other than COMPLETE (case-insensitive).
+3. missing_price: price or quantity missing, empty, non-numeric, or <= 0.
+4. invalid: anything else unparseable (bad timestamp, side not BUY/SELL,
+   instrument_type not CE/PE, bad strike/lot_size). Message says which field.
+A row counted under one rule is never counted again under a later rule.
+
+NORMALIZATION
+- timestamps parsed to timezone-aware datetimes; a naive timestamp is assumed IST
+  (+05:30) and gets a "assumed_ist" warning (once per file, not per row).
+- side and status uppercased; symbol stripped and uppercased; numeric fields to
+  float/int; expiry to date.
+- Do not mutate or interpret prices beyond parsing.
+
+TESTS
+- Each dataset in data/datasets/ parses without error.
+- For messy.csv, counts duplicates / rejected / missing_price equal the
+  expected_ingest_warnings in its ground-truth JSON. If they do NOT match, do not
+  loosen the test: tell me whether the parser or the generator is wrong and why.
+- clean.csv: zero warnings, kept == raw_rows.
+- Sorting: output is ascending by timestamp even though messy.csv is shuffled.
+- Schema errors: missing column, extra column, empty file, header-only file, wrong
+  case headers (should succeed).
+- Row rules: one test per rule, plus a test that a row matching two rules is counted
+  once under the higher-precedence rule.
+- Naive timestamps get assumed_ist exactly once.
+- Accepts a file path, bytes, and an open file object.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 3: Ingestion and
+validation" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit
+with the message "feat(ingest): validation and cleaning with tests", and push to
+origin main. Show me `git status` and `git log --oneline -3` afterwards. Never
+commit .env, API keys, or node_modules. If tests fail, do not commit; fix first.
+
+Result: worked

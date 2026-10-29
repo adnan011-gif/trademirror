@@ -441,3 +441,88 @@ The multi-seed results. The clean month should fire at most once in 30, and the 
 The other single-habit datasets. Note which ones, if any, trigger holding_losers. A revenge-trading month can legitimately produce long-held losers as a side effect, so a hit there isn’t necessarily a bug, but you should know about it.
 
 Result: worked
+
+## Prompt 5b: revenge_trading detector
+
+Step 5b: implement ONLY the revenge_trading detector in
+backend/app/detectors/revenge_trading.py. Append a new section to
+backend/tests/test_detectors.py; do not touch the holding_losers section.
+
+RULE FOR THIS STEP (important): the thresholds below are fixed. If a test or the
+multi-seed run fails, do NOT change a threshold or loosen a test. Stop, report the
+numbers and your diagnosis (detector logic, threshold design, or generator), and
+let me decide. Record any such report in the Result line of PROMPTS.md.
+
+DEFINITION
+Habit: after a losing trade, the trader jumps back in quickly with a bigger
+position.
+Detector: class RevengeTradingDetector(BaseDetector), key "revenge_trading",
+returning HabitResult | None. Gross P&L only (state in the docstring).
+
+DEFINITIONS USED BY THE FORMULA (document in the docstring)
+- Closing event: all Trade slices sharing the same exit_order_id, treated as ONE
+  event with pnl = sum of slice pnls, quantity = sum of slice quantities, exit_time
+  = their exit_time.
+- Entry event: all Trade slices sharing the same entry_order_id, treated as one
+  entry with quantity = sum, entry_time = their entry_time. Skip any entry that is
+  an add-on (is_add_on = true); those belong to the averaging_down detector.
+- Prior event for an entry = the closing event with the latest exit_time that is
+  <= the entry's entry_time (ties broken by exit_order_id). If none, the entry is
+  ignored.
+
+FORMULA (named module constants)
+1. An entry is FLAGGED when all hold:
+   a) prior event pnl < 0
+   b) 0 <= entry_time - prior exit_time <= WINDOW_MINUTES (15)
+   c) entry quantity >= SIZE_MULTIPLE (1.5) * prior event quantity
+2. Require len(flagged entries) >= MIN_FLAGGED (3), else return None.
+3. flagged_trade_ids = the Trade.trade_id of every slice belonging to a flagged
+   entry, sorted.
+4. estimated_cost_inr = max(0, -(sum of gross_pnl over those slices)). This is the
+   NET loss on revenge trades, so winners among them offset losers. If it is 0,
+   return None.
+5. confidence = min(1, flagged_entries / 8), rounded to 2.
+6. metrics = {eligible_entries (entries whose prior event was a loss within the
+   window, regardless of size), flagged_entries, avg_size_multiple (mean of entry
+   qty / prior qty over flagged), avg_gap_minutes, flagged_net_pnl_inr,
+   revenge_win_rate (share of flagged entries that were profitable)}.
+7. name "Re-entering fast after a loss with a bigger size"; formula_note = a plain
+   paragraph a trader can read with the actual numbers filled in.
+
+TESTS
+Hand-built Trade lists with hand-computed expectations:
+- fires on a constructed case: exact cost, ids, metrics
+- None when the gap is 16 min, when size is 1.49x, when the prior trade was a win,
+  when flagged < 3
+- boundary: exactly 15 min and exactly 1.5x count as flagged
+- multi-slice closing event is aggregated (prior qty and pnl are sums)
+- add-on entries are skipped
+- entry with no prior event is ignored
+- net cost can go to zero or negative -> None
+- determinism
+
+DATASET TESTS (parse_orders -> pair_orders -> detect):
+- clean.csv: None
+- single_revenge_trading.csv: fires; map flagged entries to ground-truth
+  entry_order_ids; assert precision >= 0.8 and recall >= 0.6; assert the cost is
+  within 0.5x to 2.0x of injected_loss_inr. Print precision, recall, estimated cost,
+  injected_loss_inr, and tell me exactly what the generator's injected_loss_inr
+  measures for this habit so we know the comparison is like-for-like.
+- mixed.csv: fires; print precision/recall and cost versus ground truth. Also print
+  how many flagged trade ids overlap with holding_losers flags on mixed.csv.
+- Other single_* datasets: do not assert. Print whether it fires on each.
+
+MULTI-SEED (in memory, using the existing generate_dataset_in_memory): 30 clean
+months with new seeds -> assert it fires on at most 1; 30 months with
+revenge_trading planted at medium -> assert detection >= 0.8. Print both fractions.
+Confirm `make data` still reproduces byte-identical committed files.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 5b: revenge_trading
+detector" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit
+with the message "feat(detectors): revenge_trading", and push to origin main. Show
+me `git status` and `git log --oneline -3` afterwards. Never commit .env, API keys,
+or node_modules. If tests fail, do not commit; fix first.
+
+Result: worked

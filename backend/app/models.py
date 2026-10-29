@@ -56,6 +56,31 @@ class Trade:
         """List of order IDs involved in this trade."""
         return [self.entry_order_id, self.exit_order_id]
 
+    @property
+    def trade_lots(self) -> float:
+        """Position size expressed in lots (quantity / lot_size).
+
+        Use this — not raw quantity — when comparing sizes across different
+        instruments that have different lot sizes (e.g. NIFTY=75 vs BANKNIFTY=35).
+        """
+        return self.quantity / self.lot_size
+
+
+def aggregate_lots(slices: "list[Trade]") -> float:
+    """Return the total position size in lots for a group of Trade slices.
+
+    Each slice contributes its own lots (quantity / lot_size) so that
+    cross-instrument comparisons remain meaningful even when lot sizes differ.
+
+    Args:
+        slices: One or more Trade objects that share an entry_order_id or
+                exit_order_id and represent the same logical position event.
+
+    Returns:
+        Sum of (quantity / lot_size) over all slices, as a float.
+    """
+    return sum(t.trade_lots for t in slices)
+
 
 @dataclass(frozen=True)
 class OpenPosition:

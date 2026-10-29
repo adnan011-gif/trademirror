@@ -8,10 +8,11 @@ Uses gross P&L only (charges are excluded). Trades with gross_pnl == 0 are not l
 
 Definitions:
 - Closing event: All Trade slices sharing the same exit_order_id, treated as ONE event
-  with pnl = sum of slice pnls, quantity = sum of slice quantities, and exit_time = their exit_time.
+  with pnl = sum of slice pnls, lots = sum of (quantity/lot_size) per slice, and
+  exit_time = their exit_time.
 - Entry event: All Trade slices sharing the same entry_order_id, treated as one entry
-  with quantity = sum of slice quantities, entry_time = their entry_time. Add-on entries
-  (is_add_on = True) are skipped; those belong to the averaging_down detector.
+  with lots = sum of (quantity/lot_size) per slice, entry_time = their entry_time. Add-on
+  entries (is_add_on = True) are skipped; those belong to the averaging_down detector.
 - Prior event: For any entry event, the closing event with the latest exit_time that is
   <= the entry's entry_time (ties broken by exit_order_id). If no such closing event exists,
   the entry is ignored.
@@ -20,7 +21,10 @@ Detection Criteria:
 1. An entry is FLAGGED when all of the following hold:
    a) prior event pnl < 0
    b) 0 <= entry_time - prior exit_time <= WINDOW_MINUTES (15.0)
-   c) entry quantity >= SIZE_MULTIPLE (1.5) * prior event quantity
+   c) entry_lots >= SIZE_MULTIPLE (1.5) * prior_event_lots
+      where lots = sum(quantity / lot_size) over all slices in the event.
+      Comparing in lots prevents cross-instrument false positives (e.g. NIFTY
+      lot_size=75 vs BANKNIFTY lot_size=35).
 2. Require len(flagged entries) >= MIN_FLAGGED (3), else return None.
 3. flagged_trade_ids = sorted list of Trade.trade_id for every slice belonging to a flagged entry.
 4. estimated_cost_inr = max(0.0, -(sum of gross_pnl over those slices)). This is the net loss
@@ -29,7 +33,7 @@ Detection Criteria:
 6. metrics = {
        "eligible_entries": count of entries whose prior event was a loss within WINDOW_MINUTES,
        "flagged_entries": count of flagged entries,
-       "avg_size_multiple": mean of (entry qty / prior qty) over flagged entries,
+       "avg_size_multiple": mean of (entry_lots / prior_lots) over flagged entries (in lots),
        "avg_gap_minutes": mean of gap minutes over flagged entries,
        "flagged_net_pnl_inr": net gross P&L of flagged trade slices,
        "revenge_win_rate": share of flagged entries that were profitable (net pnl > 0),
@@ -39,7 +43,7 @@ Detection Criteria:
 from typing import Any
 
 from app.detectors.base import BaseDetector, HabitResult
-from app.models import Trade
+from app.models import Trade, aggregate_lots
 
 WINDOW_MINUTES: float = 15.0
 SIZE_MULTIPLE: float = 1.5
@@ -63,17 +67,23 @@ class RevengeTradingDetector(BaseDetector):
             return None
 
         # Step 1: Aggregate Trade slices into Closing Events by exit_order_id
-        closing_events_by_id: dict[str, dict[str, Any]] = {}
+        # Collect slices first, then compute lots after all slices are gathered.
+        closing_slices_by_id: dict[str, list[Trade]] = {}
+        closing_meta: dict[str, dict[str, Any]] = {}
         for t in trades:
-            if t.exit_order_id not in closing_events_by_id:
-                closing_events_by_id[t.exit_order_id] = {
+            closing_slices_by_id.setdefault(t.exit_order_id, []).append(t)
+            if t.exit_order_id not in closing_meta:
+                closing_meta[t.exit_order_id] = {
                     "exit_order_id": t.exit_order_id,
                     "exit_time": t.exit_time,
-                    "quantity": 0,
                     "gross_pnl": 0.0,
                 }
-            closing_events_by_id[t.exit_order_id]["quantity"] += t.quantity
-            closing_events_by_id[t.exit_order_id]["gross_pnl"] += t.gross_pnl
+            closing_meta[t.exit_order_id]["gross_pnl"] += t.gross_pnl
+
+        closing_events_by_id: dict[str, dict[str, Any]] = {}
+        for eid, meta in closing_meta.items():
+            meta["lots"] = aggregate_lots(closing_slices_by_id[eid])
+            closing_events_by_id[eid] = meta
 
         closings = list(closing_events_by_id.values())
 
@@ -84,16 +94,18 @@ class RevengeTradingDetector(BaseDetector):
                 entry_events_by_id[t.entry_order_id] = {
                     "entry_order_id": t.entry_order_id,
                     "entry_time": t.entry_time,
-                    "quantity": 0,
                     "gross_pnl": 0.0,
                     "is_add_on": False,
                     "slices": [],
                 }
-            entry_events_by_id[t.entry_order_id]["quantity"] += t.quantity
             entry_events_by_id[t.entry_order_id]["gross_pnl"] += t.gross_pnl
             if t.is_add_on:
                 entry_events_by_id[t.entry_order_id]["is_add_on"] = True
             entry_events_by_id[t.entry_order_id]["slices"].append(t)
+
+        # Compute lots after all slices are collected
+        for ev in entry_events_by_id.values():
+            ev["lots"] = aggregate_lots(ev["slices"])
 
         sorted_entries = sorted(
             entry_events_by_id.values(),
@@ -124,16 +136,19 @@ class RevengeTradingDetector(BaseDetector):
             # Condition a & b: prior event was a loss and within WINDOW_MINUTES
             if prior["gross_pnl"] < 0 and 0.0 <= gap_minutes <= WINDOW_MINUTES:
                 eligible_entries += 1
-                size_mult = entry["quantity"] / prior["quantity"]
+                # Condition c: compare in LOTS (quantity / lot_size) to avoid
+                # cross-instrument false positives (NIFTY lot=75, BANKNIFTY lot=35).
+                entry_lots = entry["lots"]
+                prior_lots = prior["lots"]
+                size_mult_lots = entry_lots / prior_lots if prior_lots > 0 else 0.0
 
-                # Condition c: entry quantity >= SIZE_MULTIPLE * prior quantity
-                if entry["quantity"] >= SIZE_MULTIPLE * prior["quantity"]:
+                if entry_lots >= SIZE_MULTIPLE * prior_lots:
                     flagged_entries.append(
                         {
                             "entry": entry,
                             "prior": prior,
                             "gap_minutes": gap_minutes,
-                            "size_multiple": size_mult,
+                            "size_multiple": size_mult_lots,
                         }
                     )
                     flagged_slices.extend(entry["slices"])
@@ -168,11 +183,11 @@ class RevengeTradingDetector(BaseDetector):
 
         formula_note = (
             f"After taking a loss, you re-entered within {WINDOW_MINUTES:.0f} minutes with at "
-            f"least {SIZE_MULTIPLE:.1f}x your previous position size on {len(flagged_entries)} "
-            f"occasions (out of {eligible_entries} re-entries following a loss within "
-            f"{WINDOW_MINUTES:.0f} minutes). These revenge trades averaged "
-            f"{metrics['avg_size_multiple']:.2f}x the prior size with an average gap of "
-            f"{metrics['avg_gap_minutes']:.1f} minutes, resulting in a net loss of "
+            f"least {SIZE_MULTIPLE:.1f}× your previous position size (measured in lots) on "
+            f"{len(flagged_entries)} occasions (out of {eligible_entries} re-entries following "
+            f"a loss within {WINDOW_MINUTES:.0f} minutes). These revenge trades averaged "
+            f"{metrics['avg_size_multiple']:.2f}× the prior size (in lots) with an average "
+            f"gap of {metrics['avg_gap_minutes']:.1f} minutes, resulting in a net loss of "
             f"₹{estimated_cost_inr:,.2f} (win rate of {metrics['revenge_win_rate'] * 100:.0f}%)."
         )
 

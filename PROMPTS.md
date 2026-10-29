@@ -622,3 +622,48 @@ node_modules. If tests fail, do not commit; fix first.
 
 Result: worked
 
+## Prompt 5c-fix: audit and lots fix
+
+Step 5c-fix. RULE (same as before): do NOT change any threshold or loosen any
+assertion. If something unexpected comes up, stop and report numbers and diagnosis
+instead of adjusting. In your final summary, list every file you changed and every
+existing test you had to edit, with the reason.
+
+PART A: AUDIT (read-only, report before changing anything)
+1. Run `git show --stat b160836 -- data/`. List every file under data/datasets and
+   data/ground_truth whose bytes changed in that commit. For any file other than
+   those belonging to single_overtrading and mixed (and messy if relevant), explain
+   why it changed. In particular tell me whether clean.csv or clean.json changed.
+2. Describe in plain words what each intensity level (low / medium / high) now means
+   in generator.py for overtrading (number of spike days, trades per spike day).
+3. On the CURRENT committed datasets, re-run and print precision, recall, and cost
+   for holding_losers (single_holding_losers, mixed) and revenge_trading
+   (single_revenge_trading, mixed), noting which numbers moved and why.
+
+PART B: FIX (compare size in lots, not raw quantity)
+1. Add a small shared helper (in app/models.py or detectors/base.py) returning
+   position size in LOTS (quantity / lot_size) for a Trade, and a helper to
+   aggregate a group of slices into lots. Use it in revenge_trading.py ONLY for size
+   condition (c): entry_lots >= SIZE_MULTIPLE (1.5) * prior_event_lots. Keep
+   threshold 1.5. Update docstring, metrics (avg_size_multiple in lots), and
+   formula_note.
+2. Add tests: (a) 1 lot BANKNIFTY loss followed within window by 1 lot NIFTY is NOT
+   flagged; (b) NIFTY 1 lot loss then NIFTY 2 lots is flagged; (c) 2 lots then 3
+   lots (1.5x) is flagged; (d) same-instrument lots behave identically to old
+   raw-quantity behavior. Edit fixtures only if existing tests lacked a lot_size.
+3. Re-run on mixed.csv (expecting P0074, P0079, P0105 to disappear) and print
+   precision, recall, flagged IDs; re-run single_revenge_trading and print
+   precision/recall/cost.
+4. Multi-seed (in memory, fresh seeds 860-889 clean -> at most 1 fires; seeds 890-919
+   revenge_trading medium -> >= 0.8 detection). Stop if planted detection drops or
+   single_revenge recall falls below 0.6.
+5. Confirm `make data` reproduces byte-identical committed files.
+
+Update PROMPTS.md: append prompt verbatim as "## Prompt 5c-fix: audit and lots fix"
+with a "Result:" line.
+Git: stage relevant files, commit with message "fix(detectors): compare position size
+in lots, not raw quantity", push to origin main, and show git status and git log
+--oneline -3.
+
+Result: All checks passed. PART A: Only single_overtrading.*, mixed.*, messy.* changed in b160836; clean.* unchanged. Intensity: low=2 spike days, medium=3, high=5, each targets >=12 trades/day. holding_losers: precision=1.0/recall=1.0 on both datasets. revenge_trading single: precision=1.0/recall=0.923; mixed before fix: precision=0.75/recall=0.692 with FPs P0082/P0087/P0113 (cross-instrument 1-lot each). PART B: Added Trade.trade_lots property and aggregate_lots() to models.py; switched revenge_trading.py size comparison to lots. 5 new tests in Section 2b all pass. After fix mixed: FPs gone, precision/recall both improved. Multi-seed: clean 0/30 fires, planted 30/30 fires (100%). make data byte-identical.
+

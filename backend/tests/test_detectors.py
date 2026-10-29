@@ -1296,3 +1296,209 @@ def test_overtrading_multi_seed_robustness() -> None:
     assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"
 
 
+
+# =====================================================================
+# SECTION 2b: RevengeTradingDetector — Lots-Based Size Tests (Step 5c-fix)
+# =====================================================================
+
+
+def _make_rt_trade_ls(
+    trade_id: str,
+    entry_time: datetime,
+    exit_time: datetime,
+    quantity: int,
+    lot_size: int,
+    gross_pnl: float,
+    entry_order_id: str,
+    exit_order_id: str,
+    symbol: str = "NIFTY24OCT25000CE",
+    is_add_on: bool = False,
+    is_partial_exit: bool = False,
+) -> Trade:
+    """Helper for lot-size-aware revenge trading tests."""
+    return Trade(
+        trade_id=trade_id,
+        symbol=symbol,
+        instrument_type="CE",
+        strike=25000.0,
+        expiry=date(2024, 10, 31),
+        direction="LONG",
+        entry_time=entry_time,
+        exit_time=exit_time,
+        entry_price=100.0,
+        exit_price=100.0 + (gross_pnl / quantity) if quantity > 0 else 100.0,
+        quantity=quantity,
+        lot_size=lot_size,
+        hold_minutes=(exit_time - entry_time).total_seconds() / 60.0,
+        gross_pnl=gross_pnl,
+        entry_order_id=entry_order_id,
+        exit_order_id=exit_order_id,
+        is_partial_exit=is_partial_exit,
+        is_add_on=is_add_on,
+        trading_date=entry_time.date(),
+    )
+
+
+def _build_lots_trades(
+    prior_qty: int,
+    prior_lot_size: int,
+    entry_qty: int,
+    entry_lot_size: int,
+    prior_symbol: str = "NIFTY24OCT25000CE",
+    entry_symbol: str = "NIFTY24OCT25000CE",
+    n_repeat: int = 3,
+) -> "list[Trade]":
+    """Build n_repeat revenge pairs: prior loss immediately followed by re-entry."""
+    base = datetime(2024, 10, 7, 9, 30, tzinfo=IST)
+    trades = []
+    for i in range(n_repeat):
+        day_offset = timedelta(days=i)
+        t_base = base + day_offset
+        prior_exit = t_base + timedelta(minutes=10)
+        entry_entry = prior_exit  # gap = 0 minutes
+        entry_exit = prior_exit + timedelta(minutes=10)
+
+        trades.append(_make_rt_trade_ls(
+            trade_id=f"PR{i}",
+            entry_time=t_base,
+            exit_time=prior_exit,
+            quantity=prior_qty,
+            lot_size=prior_lot_size,
+            gross_pnl=-1000.0,
+            entry_order_id=f"EPR{i}",
+            exit_order_id=f"XPR{i}",
+            symbol=prior_symbol,
+        ))
+        trades.append(_make_rt_trade_ls(
+            trade_id=f"EN{i}",
+            entry_time=entry_entry,
+            exit_time=entry_exit,
+            quantity=entry_qty,
+            lot_size=entry_lot_size,
+            gross_pnl=-2000.0,
+            entry_order_id=f"EEN{i}",
+            exit_order_id=f"XEN{i}",
+            symbol=entry_symbol,
+        ))
+    return trades
+
+
+def test_revenge_trading_cross_instrument_1lot_not_flagged() -> None:
+    """1-lot BANKNIFTY loss followed by 1-lot NIFTY entry must NOT be flagged.
+
+    Raw quantities: 35 vs 75 -> ratio 2.14 >= 1.5 (would fire with old code).
+    In lots: 1.0 vs 1.0 -> ratio 1.0 < 1.5 (correctly suppressed).
+    """
+    trades = _build_lots_trades(
+        prior_qty=35,
+        prior_lot_size=35,
+        entry_qty=75,
+        entry_lot_size=75,
+        prior_symbol="BANKNIFTY24OCT51000PE",
+        entry_symbol="NIFTY24OCT25000CE",
+    )
+    detector = RevengeTradingDetector()
+    result = detector.detect(trades)
+    assert result is None, (
+        f"Detector fired cross-instrument 1-lot vs 1-lot: "
+        f"flagged={getattr(result, 'flagged_trade_ids', None)}"
+    )
+
+
+def test_revenge_trading_same_instrument_1lot_then_2lot_flagged() -> None:
+    """NIFTY 1-lot loss then NIFTY 2-lot entry IS flagged (2.0 >= 1.5)."""
+    trades = _build_lots_trades(
+        prior_qty=75,
+        prior_lot_size=75,
+        entry_qty=150,
+        entry_lot_size=75,
+    )
+    detector = RevengeTradingDetector()
+    result = detector.detect(trades)
+    assert result is not None, "Detector failed to fire on NIFTY 1-lot -> 2-lot (ratio 2.0)"
+    flagged = set(result.flagged_trade_ids)
+    assert all(f"EN{i}" in flagged for i in range(3)), (
+        f"Expected all EN0-EN2 flagged; got {sorted(flagged)}"
+    )
+
+
+def test_revenge_trading_2lots_then_3lots_flagged() -> None:
+    """NIFTY 2-lot loss then NIFTY 3-lot entry IS flagged (3/2 = 1.5 >= 1.5)."""
+    trades = _build_lots_trades(
+        prior_qty=150,
+        prior_lot_size=75,
+        entry_qty=225,
+        entry_lot_size=75,
+    )
+    detector = RevengeTradingDetector()
+    result = detector.detect(trades)
+    assert result is not None, "Detector failed to fire on NIFTY 2-lot -> 3-lot (ratio 1.5)"
+    flagged = set(result.flagged_trade_ids)
+    assert all(f"EN{i}" in flagged for i in range(3)), (
+        f"Expected all EN0-EN2 flagged; got {sorted(flagged)}"
+    )
+
+
+def test_revenge_trading_same_instrument_lots_same_as_old_raw_behavior() -> None:
+    """Same-instrument trades: lots ratio equals raw-quantity ratio exactly.
+
+    NIFTY prior 1 lot (75 qty) -> NIFTY entry 2 lots (150 qty):
+    raw ratio = 150/75 = 2.0, lots ratio = 2/1 = 2.0 -- same result.
+    avg_size_multiple must equal 2.0.
+    """
+    trades = _build_lots_trades(
+        prior_qty=75,
+        prior_lot_size=75,
+        entry_qty=150,
+        entry_lot_size=75,
+    )
+    detector = RevengeTradingDetector()
+    result = detector.detect(trades)
+    assert result is not None, "Expected detector to fire but returned None"
+    assert abs(result.metrics["avg_size_multiple"] - 2.0) < 0.01, (
+        f"Expected avg_size_multiple=2.0, got {result.metrics['avg_size_multiple']}"
+    )
+
+
+def test_revenge_trading_benchmark_datasets_after_lots_fix() -> None:
+    """After the lots fix, cross-instrument FPs on mixed.csv must be gone.
+
+    Previously P0082, P0087, P0113 were false positives (BANKNIFTY 1-lot prior
+    vs NIFTY 1-lot entry). After the fix precision must be >= 0.8 and recall >= 0.6.
+    """
+    import json
+    from pathlib import Path
+
+    detector = RevengeTradingDetector()
+    mixed_orders = parse_orders(Path("data/datasets/mixed.csv")).orders
+    mixed_trades = pair_orders(mixed_orders).trades
+
+    eid_to_pid = {t.entry_order_id: t.trade_id for t in mixed_trades}
+
+    result = detector.detect(mixed_trades)
+    assert result is not None, "Detector failed to fire on mixed.csv"
+
+    flagged = set(result.flagged_trade_ids)
+
+    with open("data/ground_truth/mixed.json") as fh:
+        gt = json.load(fh)
+    gt_entry_oids = set(gt["habits"]["revenge_trading"]["entry_order_ids"])
+    gt_pids = {eid_to_pid[e] for e in gt_entry_oids if e in eid_to_pid}
+
+    fp_ids = flagged - gt_pids
+    tp = len(flagged & gt_pids)
+    fp = len(fp_ids)
+    fn = len(gt_pids - flagged)
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+    print(f"\n--- mixed.csv after lots fix ---")
+    print(f"  flagged={sorted(flagged)}")
+    print(f"  gt_pids={sorted(gt_pids)}")
+    print(f"  TP={tp}, FP={fp}, FN={fn}")
+    print(f"  precision={precision:.3f}, recall={recall:.3f}")
+    print(f"  FP ids: {sorted(fp_ids)}")
+
+    assert precision >= 0.8, f"Precision {precision:.3f} < 0.8 after lots fix"
+    assert recall >= 0.6, f"Recall {recall:.3f} < 0.6 after lots fix"

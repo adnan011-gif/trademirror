@@ -1275,3 +1275,43 @@ unsupported claims, derive rules from trader data" and push to origin main. Show
 `git status` and `git log --oneline -3`. Never commit .env, API keys, or node_modules.
 
 Result: worked. Templates updated with exact detector cost descriptions removing "in excess decay". UNSUPPORTED_CLAIM_TERMS added to verifier with whole-word regex matching. Dynamic derived rules implemented: holding_losers time stop derives from median winner hold (nearest 5m, min 5) and overtrading cap derives from ceil(median_daily_trades) + 1. All derived numbers included in facts allowed_numbers. All 157 tests pass, including new verifier unit tests and full-dataset self-consistency. Manual smoke runs cleanly on mixed.csv and single_overtrading.csv.
+
+## Prompt 7c: summary grammar and oversizing rule
+
+Step 7c: two small corrections. Do not touch detectors, ranking, the generator,
+committed datasets, or verifier logic. If anything unexpected comes up, STOP and
+report. In your final summary list every file changed (expected: templates.py, tests,
+PROMPTS.md only, plus narrative.py only if build_facts needs the median_lots value).
+
+A) Summary sentence grammar (templates.py)
+- With exactly one habit: "1 habit stood out this month: <habit name in lowercase
+  first letter, as a noun phrase>, with an attributed cost of ₹X." Make sure all five
+  habit names read naturally in this sentence; if any name does not, add a short
+  lowercase "label" field per habit in templates.py and use it here and nowhere else.
+- With 2 or 3 habits: keep the current sentence.
+- All numbers still come from the facts bundle and must pass the verifier.
+
+B) Oversizing rule derived from the trader's own size
+Replace "maximum of 2 lots" with: "After two wins or two losses in a row, keep your
+position at your usual N lot(s) instead of increasing it." where N =
+max(1, round(median_lots)) from the oversizing metrics. Singular "lot" when N is 1,
+plural otherwise. N must appear in the habit's approved_rule so the verifier accepts it.
+Update the template comment: the number is now derived from the trader's data.
+Tests: a trader with median_lots 1 and one with median_lots 5 get different rules, both
+pass the verifier; singular/plural wording is correct; the five templates still pass
+the verifier on all datasets (self-consistency test unchanged).
+
+C) Print
+- the full test suite result and `ruff check .`
+- `python -m app.narrative` on single_overtrading.csv, single_oversizing.csv, and
+  mixed.csv (summary and habit rules only is fine)
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 7c: summary grammar and
+oversizing rule" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, commit "fix(narrative): readable
+single-habit summary, size rule derived from trader's median lots" and push to origin
+main. Show me `git status` and `git log --oneline -3`. Never commit .env, API keys, or
+node_modules.
+
+Result: worked. Single-habit summary sentence format updated with HABIT_LABELS lowercase noun phrases in templates.py. Oversizing approved rule dynamically derives N = max(1, round(median_lots)) with singular/plural lot(s) wording, included in approved_rule and verified. All 159 tests pass, ruff clean, and verified smoke outputs confirmed on single_overtrading, single_oversizing, and mixed datasets.

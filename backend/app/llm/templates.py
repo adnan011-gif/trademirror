@@ -29,13 +29,22 @@ APPROVED_RULES: dict[str, str] = {
         "day once reached."
     ),
     "oversizing": (
-        "Limit position sizing to a maximum of 2 lots per order regardless of preceding "
-        "win or loss streaks."
+        "After two wins or two losses in a row, keep your position at your usual "
+        "1 lot instead of increasing it."
     ),
     "averaging_down": (
         "Never add contracts to an existing position that is currently trading below "
         "its average entry price."
     ),
+}
+
+# Short lowercase noun phrases for natural reading in single-habit summaries
+HABIT_LABELS: dict[str, str] = {
+    "holding_losers": "holding losing trades too long",
+    "revenge_trading": "re-entering fast after a loss with a bigger size",
+    "overtrading": "taking far more trades than usual on some days",
+    "oversizing": "taking an oversized position after a win or loss streak",
+    "averaging_down": "adding to a losing position",
 }
 
 NOTHING_MATERIAL_SUMMARY = "No behavioral habit cleared the evidence bar this month."
@@ -47,10 +56,10 @@ def get_approved_rule(habit_key: str, metrics: dict[str, Any] | None = None) -> 
     Derived dynamically from the trader's own data where applicable:
     - holding_losers: time stop equals median winner hold, rounded to nearest 5m (min 5).
     - overtrading: daily cap equals ceil(median_daily_trades) + 1.
+    - oversizing: typical size equals max(1, round(median_lots)).
 
     Fixed constants used only for behavioral rules of thumb:
     - revenge_trading: 30 minutes emotional cooldown.
-    - oversizing: 2 lots risk limit.
     - averaging_down: zero add-ons to losers.
     """
     m = metrics or {}
@@ -80,11 +89,13 @@ def get_approved_rule(habit_key: str, metrics: dict[str, Any] | None = None) -> 
         )
 
     if habit_key == "oversizing":
-        # Fixed constant: 2 lots is a standard position-sizing risk rule of thumb
-        # for retail accounts, not a statistical property of the trader.
+        # Derived from the trader's data: normal position size from median_lots
+        med_lots = m.get("median_lots", 1.0)
+        n_lots = max(1, int(round(med_lots)))
+        lot_word = "lot" if n_lots == 1 else "lots"
         return (
-            "Limit position sizing to a maximum of 2 lots per order regardless of preceding "
-            "win or loss streaks."
+            f"After two wins or two losses in a row, keep your position at your usual "
+            f"{n_lots} {lot_word} instead of increasing it."
         )
 
     if habit_key == "averaging_down":
@@ -173,8 +184,13 @@ def generate_template_narrative(ranked: RankedResult) -> dict[str, Any]:
     total_cost = ranked.total_attributed_cost_inr
 
     if n_habits == 1:
+        h0 = ranked.habits[0]
+        label = HABIT_LABELS.get(
+            h0.key,
+            h0.name[0].lower() + h0.name[1:] if h0.name else h0.key,
+        )
         summary = (
-            f"Your trading this month was impacted by {ranked.habits[0].name} "
+            f"1 habit stood out this month: {label}, "
             f"with an attributed cost of ₹{total_cost:,.2f}."
         )
     else:

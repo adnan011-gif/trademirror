@@ -465,3 +465,103 @@ def test_changing_median_daily_changes_overtrading_cap() -> None:
     assert "8 completed trades" in rule_2
 
     assert rule_1 != rule_2
+
+
+def test_oversizing_rule_derived_from_trader_median_lots() -> None:
+    """Verifies that oversizing rule derives from median_lots with singular/plural lot(s)."""
+    from app.llm.templates import get_approved_rule
+    from app.narrative import build_facts
+    from app.ranking import RankedHabit, RankedResult
+
+    # Trader with median_lots = 1 -> singular "1 lot"
+    rule_1 = get_approved_rule("oversizing", {"median_lots": 1.0})
+    assert "usual 1 lot instead of increasing it." in rule_1
+
+    # Trader with median_lots = 5 -> plural "5 lots"
+    rule_5 = get_approved_rule("oversizing", {"median_lots": 5.0})
+    assert "usual 5 lots instead of increasing it." in rule_5
+
+    assert rule_1 != rule_5
+
+    # Verify both pass verifier with their respective facts
+    for lots in (1.0, 5.0):
+        h = RankedHabit(
+            key="oversizing",
+            name="Taking an oversized position after a win or loss streak",
+            flagged_trade_ids=["P0001"],
+            estimated_cost_inr=5000.0,
+            confidence=1.0,
+            metrics={"median_lots": lots, "flagged_entries": 3},
+            formula_note="",
+            attributed_cost_inr=5000.0,
+            overlap_share=0.0,
+        )
+        ranked = RankedResult(
+            habits=[h],
+            total_attributed_cost_inr=5000.0,
+            overlaps=[],
+            dropped=[],
+            material=True,
+            reason=None,
+            context={
+                "n_trades": 50,
+                "gross_pnl_inr": -5000.0,
+                "gross_loss_inr": 10000.0,
+                "win_rate": 0.4,
+            },
+        )
+        facts = build_facts(ranked, trades=[])
+        from app.llm.templates import generate_template_narrative
+
+        narrative = generate_template_narrative(ranked)
+        report = verify_narrative(narrative, facts)
+        assert report.passed is True, f"Failed for median_lots={lots}: {report.failures}"
+
+
+def test_single_habit_summary_grammar_and_verifier_pass() -> None:
+    """Verifies 1-habit summary format '1 habit stood out this month: ...' passes verifier."""
+    from app.llm.templates import generate_template_narrative
+    from app.narrative import build_facts
+    from app.ranking import RankedHabit, RankedResult
+
+    h = RankedHabit(
+        key="holding_losers",
+        name="Holding losing trades too long",
+        flagged_trade_ids=["P0001"],
+        estimated_cost_inr=15000.0,
+        confidence=1.0,
+        metrics={
+            "median_winner_hold_min": 20.0,
+            "flagged_median_hold_min": 60.0,
+            "flagged_count": 5,
+        },
+        formula_note="",
+        attributed_cost_inr=15000.0,
+        overlap_share=0.0,
+    )
+    ranked = RankedResult(
+        habits=[h],
+        total_attributed_cost_inr=15000.0,
+        overlaps=[],
+        dropped=[],
+        material=True,
+        reason=None,
+        context={
+            "n_trades": 50,
+            "gross_pnl_inr": -15000.0,
+            "gross_loss_inr": 25000.0,
+            "win_rate": 0.4,
+        },
+    )
+
+    facts = build_facts(ranked, trades=[])
+    narrative = generate_template_narrative(ranked)
+
+    expected_summary = (
+        "1 habit stood out this month: holding losing trades too long, "
+        "with an attributed cost of ₹15,000.00."
+    )
+    assert narrative["summary"].startswith(expected_summary)
+    report = verify_narrative(narrative, facts)
+    assert report.passed is True, f"Failed verification: {report.failures}"
+

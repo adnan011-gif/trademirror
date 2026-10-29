@@ -1,6 +1,10 @@
 """Configuration module for TradeMirror backend settings."""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -13,6 +17,10 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_TIMEOUT_SECONDS: float = 20.0
     MAX_UPLOAD_MB: int = 5
+    RATE_LIMIT_PER_MINUTE: int = 30
+    MAX_ROWS: int = 20000
+    SAMPLES_DIR: Path = _REPO_ROOT / "data" / "datasets"
+    FRONTEND_DIST: Path = _REPO_ROOT / "frontend" / "dist"
 
 
 settings = Settings()

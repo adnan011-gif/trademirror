@@ -1315,3 +1315,113 @@ main. Show me `git status` and `git log --oneline -3`. Never commit .env, API ke
 node_modules.
 
 Result: worked. Single-habit summary sentence format updated with HABIT_LABELS lowercase noun phrases in templates.py. Oversizing approved rule dynamically derives N = max(1, round(median_lots)) with singular/plural lot(s) wording, included in approved_rule and verified. All 159 tests pass, ruff clean, and verified smoke outputs confirmed on single_overtrading, single_oversizing, and mixed datasets.
+
+## Prompt 8: API and static serving
+
+Step 8: implement the API and single-service static serving. Files already in the
+tree: backend/app/api/routes.py, backend/app/api/schemas.py, backend/app/main.py,
+config.py, backend/tests/test_api.py. Additions: none besides what is listed here.
+
+RULES: do not touch detectors, ranking, narrative logic, the generator, or committed
+datasets. Tests make no real network calls. If something unexpected comes up, STOP and
+report. In your final summary list every file changed outside the files named above
+(expected: none).
+
+ENDPOINTS (all under /api)
+- GET /api/health -> {"status": "ok"}
+- GET /api/samples -> list of {name, label, description} for the built-in datasets
+  (whitelist: clean, mixed, messy, and the five single_* files, with plain-English
+  labels such as "A clean month: no problem habits"). The whitelist is a constant;
+  never build a file path from user input.
+- GET /api/sample/{name} -> the same response as /analyze for that dataset. Unknown
+  name -> 404 JSON. Path traversal attempts (../, encoded slashes, backslashes) -> 404.
+- POST /api/analyze (multipart form, field "file") -> the analysis response.
+
+ANALYSIS RESPONSE (pydantic, response_model, JSON only)
+{
+  dataset: {source ("upload" or sample name), n_orders_raw, n_orders_kept, n_trades,
+            counts (the ingest counts)},
+  context: {gross_pnl_inr, gross_loss_inr, win_rate, total_attributed_cost_inr},
+  material: bool,
+  summary: str,
+  habits: [{key, name, rank, attributed_cost_inr, estimated_cost_inr, overlap_share,
+            confidence, explanation, rule, formula_note, metrics,
+            evidence_trades: [{trade_id, trading_date, entry_time, exit_time, symbol,
+              instrument_type, strike, direction, quantity, lots, hold_minutes,
+              gross_pnl}],
+            evidence_total (full count of flagged trades), evidence_truncated (bool)}],
+  overlaps, dropped (with reasons),
+  warnings: [{code, row_number, order_id, message}] (cap at 50, plus warnings_total),
+  pairing_anomalies,
+  narrative: {source ("llm" or "template"), fallback_reason, llm_attempts},
+  verification: {passed, checked_numbers, checked_trade_ids, failures},
+  detector_errors: [short strings, no stack traces],
+  disclaimers: ["Gross P&L only; brokerage and taxes not included.", "Habit costs are
+    estimates from your order history, not predictions.", "This is not investment
+    advice."]
+}
+Evidence trades: sorted by gross_pnl ascending (largest loss first), capped at 25 per
+habit. Never expose ground-truth files, order ids from other datasets, file paths,
+or the facts bundle internals.
+
+SAFETY AND LIMITS
+- Upload size limit from settings.MAX_UPLOAD_MB (default 5): read in chunks and abort
+  early with 413 JSON. Cap parsed rows at MAX_ROWS = 20000 (reject with 422 and a
+  clear message). Accept only .csv names or text/csv and text/plain content types; a
+  binary or undecodable file gives 422, not 500.
+- IngestError -> 422 with its message. Any unexpected exception -> 500 with a generic
+  message and the request id, never a stack trace. Log the exception server-side.
+- Uploads are processed in memory and never written to disk or logged. Log only the
+  request id, route, status, duration, and row counts. Say this in the README
+  privacy note.
+- Request id middleware: accept X-Request-ID or generate one; return it in the
+  response header and include it in error bodies.
+- Simple in-memory per-IP rate limit on POST /api/analyze and /api/sample (default 30
+  requests per minute, configurable via settings.RATE_LIMIT_PER_MINUTE); 429 JSON with
+  Retry-After. State the limitation in a comment: per-process, resets on restart.
+- Endpoint functions that run the pipeline are plain `def` (FastAPI runs them in the
+  threadpool), so a slow request does not block the event loop.
+- Sample datasets are located via a setting SAMPLES_DIR that defaults to the repo's
+  data/datasets, so the Docker image can place them anywhere.
+
+STATIC SERVING (single service)
+If frontend/dist exists (path from settings.FRONTEND_DIST), mount it at "/" with SPA
+fallback: any non-/api path that is not a real file returns index.html. Unknown /api
+paths return JSON 404, never index.html. Add Cache-Control: no-store on /api responses
+and long-lived caching only for hashed asset files under /assets. If dist does not
+exist, the API still works and "/" returns a small JSON message.
+
+TESTS (test_api.py, replace skipped placeholders; use TestClient)
+- health; samples list matches the whitelist
+- every whitelisted sample returns 200 and a response that validates against the
+  schema; clean gives material false and an empty habits list; mixed gives three habits
+  in order with evidence trades present and capped
+- unknown sample 404; path traversal variants 404
+- upload of each committed CSV through POST /api/analyze gives the same habits and
+  costs as the sample endpoint for that dataset
+- oversize file -> 413; too many rows -> 422; wrong columns -> 422 with the column
+  names in the message; empty file -> 422; binary garbage -> 422; no file field -> 422
+- the response never contains the strings "ground_truth", "data/", a filesystem path,
+  or "Traceback"
+- request id header is present and echoed when supplied
+- rate limit: the (limit+1)th request in a minute returns 429 with Retry-After
+- a pipeline exception is returned as 500 with a request id and no stack trace
+- static: with a temporary dist containing index.html and assets/app.js, "/" serves
+  index.html, "/some/spa/route" serves index.html, "/assets/app.js" serves the file,
+  "/api/nope" returns JSON 404; without dist, "/" returns the JSON message
+- no LLM HTTP calls happen (autouse fixture still applies); analysis works with no key
+
+MANUAL SMOKE (not a test): start uvicorn, then with curl show me /api/health,
+/api/samples, /api/sample/mixed (summarised: habit keys, costs, evidence counts,
+narrative source), and an upload of clean.csv and of messy.csv (warnings_total).
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 8: API and static serving"
+with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, commit "feat(api): analyze and sample
+endpoints, limits, static serving" and push to origin main. Show me `git status` and
+`git log --oneline -3`. Never commit .env, API keys, or node_modules. If tests fail,
+do not commit; fix first.
+
+Result: worked. API implemented with /api/health, /api/samples catalogue, /api/sample/{name}, and POST /api/analyze endpoints conforming to AnalysisResponse schema. Security, upload limits, row limits, chunked abort (413), error masking without tracebacks (500), request-id middleware, per-IP rate limiting (429), and single-service SPA static serving with Cache-Control headers implemented. All 169 tests pass, ruff check clean, and manual smoke verified on uvicorn.
+

@@ -1,23 +1,24 @@
 """Deterministic fallback templates and approved behavioral rules.
 
 Responsibility:
-Provides fixed approved rules per habit key, deterministic string templates
-filling in computed metrics and attributed cost when LLM is unavailable or ungrounded,
-and standard summary sentences. Templates describe behaviour only without financial
-advice or market predictions.
+Provides approved rules per habit key (derived from trader data where applicable,
+or fixed rules of thumb with documented rationales), deterministic string templates
+filling in computed metrics and attributed cost, and standard summary sentences.
+Templates describe behaviour only without financial advice or market predictions.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from app.ranking import RankedHabit, RankedResult
 
-# Fixed approved rules per habit. Any numbers in them are their own fixed constants.
+# Base fallback templates for approved rules
 APPROVED_RULES: dict[str, str] = {
     "holding_losers": (
-        "Set a hard time stop to exit any losing trade if it has not recovered within "
-        "30 minutes of entry."
+        "Exit any losing trade that has not recovered within 20 minutes of entry, "
+        "which is about how long your winning trades last."
     ),
     "revenge_trading": (
         "Enforce a mandatory 30-minute cooldown period following any losing trade before "
@@ -40,11 +41,63 @@ APPROVED_RULES: dict[str, str] = {
 NOTHING_MATERIAL_SUMMARY = "No behavioral habit cleared the evidence bar this month."
 
 
-def get_approved_rule(habit_key: str) -> str:
-    """Return the approved behavioral rule for a given habit key."""
-    if habit_key not in APPROVED_RULES:
-        raise KeyError(f"Unknown habit key: {habit_key}")
-    return APPROVED_RULES[habit_key]
+def get_approved_rule(habit_key: str, metrics: dict[str, Any] | None = None) -> str:
+    """Return the approved behavioral rule for a given habit key.
+
+    Derived dynamically from the trader's own data where applicable:
+    - holding_losers: time stop equals median winner hold, rounded to nearest 5m (min 5).
+    - overtrading: daily cap equals ceil(median_daily_trades) + 1.
+
+    Fixed constants used only for behavioral rules of thumb:
+    - revenge_trading: 30 minutes emotional cooldown.
+    - oversizing: 2 lots risk limit.
+    - averaging_down: zero add-ons to losers.
+    """
+    m = metrics or {}
+
+    if habit_key == "holding_losers":
+        w_med = m.get("median_winner_hold_min", 20.0)
+        time_stop = max(5, int(round(w_med / 5.0) * 5))
+        return (
+            f"Exit any losing trade that has not recovered within {time_stop} minutes of entry, "
+            f"which is about how long your winning trades last."
+        )
+
+    if habit_key == "overtrading":
+        base_med = m.get("median_daily_trades", 5.0)
+        cap = int(math.ceil(base_med)) + 1
+        return (
+            f"Cap daily activity at a maximum of {cap} completed trades and stop trading "
+            f"for the day once reached."
+        )
+
+    if habit_key == "revenge_trading":
+        # Fixed constant: 30-minute cooldown is a behavioral rule of thumb for emotional resetting,
+        # not a specific statistical property of the trader.
+        return (
+            "Enforce a mandatory 30-minute cooldown period following any losing trade before "
+            "entering a new position."
+        )
+
+    if habit_key == "oversizing":
+        # Fixed constant: 2 lots is a standard position-sizing risk rule of thumb
+        # for retail accounts, not a statistical property of the trader.
+        return (
+            "Limit position sizing to a maximum of 2 lots per order regardless of preceding "
+            "win or loss streaks."
+        )
+
+    if habit_key == "averaging_down":
+        # Contains no numbers: strict behavioral prohibition against adding to losing positions.
+        return (
+            "Never add contracts to an existing position that is currently trading below "
+            "its average entry price."
+        )
+
+    if habit_key in APPROVED_RULES:
+        return APPROVED_RULES[habit_key]
+
+    raise KeyError(f"Unknown habit key: {habit_key}")
 
 
 def generate_template_explanation(habit: RankedHabit) -> str:
@@ -60,7 +113,8 @@ def generate_template_explanation(habit: RankedHabit) -> str:
         return (
             f"Across winning trades your median hold was {w_med:.1f} minutes, but flagged "
             f"losing trades were held for a median of {fl_med:.1f} minutes. Holding these "
-            f"{fl_cnt} losing positions cost an attributed ₹{cost:,.2f} in excess decay."
+            f"{fl_cnt} losing positions cost an attributed ₹{cost:,.2f} in extra loss beyond "
+            f"what you normally lose on a losing trade."
         )
 
     if key == "revenge_trading":
@@ -69,7 +123,7 @@ def generate_template_explanation(habit: RankedHabit) -> str:
         return (
             f"You re-entered the market within an average of {gap_avg:.1f} minutes following "
             f"losses, escalating size across {fl_entries} entries. This rush to recover losses "
-            f"resulted in an attributed cost of ₹{cost:,.2f}."
+            f"resulted in an attributed cost of ₹{cost:,.2f} in net loss on these re-entries."
         )
 
     if key == "overtrading":
@@ -80,7 +134,7 @@ def generate_template_explanation(habit: RankedHabit) -> str:
         return (
             f"You traded during volume spikes across {sp_cnt} days, averaging {sp_avg:.1f} "
             f"trades compared to your baseline of {base_med:.1f}. These {excess} excess trades "
-            f"produced an attributed cost of ₹{cost:,.2f}."
+            f"produced an attributed cost of ₹{cost:,.2f} in net loss on the extra trades."
         )
 
     if key == "oversizing":
@@ -89,7 +143,8 @@ def generate_template_explanation(habit: RankedHabit) -> str:
         return (
             f"You increased position sizes beyond your typical baseline of {base_lots:.1f} "
             f"lots following streaks across {fl_entries} entries. These oversized positions "
-            f"led to an attributed cost of ₹{cost:,.2f}."
+            f"led to an attributed cost of ₹{cost:,.2f} in extra loss attributable to the "
+            f"larger size."
         )
 
     if key == "averaging_down":
@@ -97,7 +152,7 @@ def generate_template_explanation(habit: RankedHabit) -> str:
         return (
             f"You added contracts to underwater positions across {fl_entries} entry events as "
             f"prices moved against you. These losing add-on trades resulted in an attributed "
-            f"cost of ₹{cost:,.2f}."
+            f"cost of ₹{cost:,.2f} in net loss on the added positions."
         )
 
     return (
@@ -134,7 +189,7 @@ def generate_template_narrative(ranked: RankedResult) -> dict[str, Any]:
             {
                 "key": h.key,
                 "explanation": generate_template_explanation(h),
-                "rule": get_approved_rule(h.key),
+                "rule": get_approved_rule(h.key, h.metrics),
             }
         )
 

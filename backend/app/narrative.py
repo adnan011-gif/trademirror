@@ -141,7 +141,7 @@ def build_facts(ranked: RankedResult, trades: list[Trade]) -> Facts:
 
     for habit in ranked.habits:
         key = habit.key
-        approved_rule = get_approved_rule(key)
+        approved_rule = get_approved_rule(key, habit.metrics)
 
         # Flagged trades for this habit
         flagged_tids = habit.flagged_trade_ids

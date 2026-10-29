@@ -53,6 +53,27 @@ FORBIDDEN_PATTERNS: list[re.Pattern[str]] = [
     ),
 ]
 
+# Unsupported claim terms that detectors do not measure directly
+UNSUPPORTED_CLAIM_TERMS: list[str] = [
+    "decay",
+    "theta",
+    "vega",
+    "volatility",
+    "implied volatility",
+    "IV",
+    "premium erosion",
+    "time value",
+    "sentiment",
+    "news",
+    "earnings",
+    "expiry effect",
+]
+
+UNSUPPORTED_CLAIM_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (term, re.compile(r"\b" + re.escape(term).replace(r"\ ", r"\s+") + r"\b", re.IGNORECASE))
+    for term in UNSUPPORTED_CLAIM_TERMS
+]
+
 TRADE_ID_PATTERN = re.compile(r"\bP\d{4}\b")
 ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 ORDINAL_PATTERN = re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE)
@@ -261,6 +282,22 @@ def verify_narrative(
                         "message": (
                             f"Forbidden recommendation/prediction pattern '{matched_str}' "
                             f"detected in {field_name}"
+                        ),
+                    }
+                )
+
+        # Check unsupported claim terms (case-insensitive, whole-word matching)
+        for term, pattern in UNSUPPORTED_CLAIM_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                matched_str = match.group(0)
+                failures.append(
+                    {
+                        "field": field_name,
+                        "kind": "unsupported_claim",
+                        "value": matched_str,
+                        "message": (
+                            f"Unsupported claim term '{matched_str}' detected in {field_name}"
                         ),
                     }
                 )

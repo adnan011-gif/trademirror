@@ -310,3 +310,158 @@ def test_verifier_returns_all_failures_together() -> None:
     assert "unknown_date" in failure_kinds
     assert "forbidden_content" in failure_kinds
     assert len(report.failures) >= 4
+
+
+def test_verifier_unsupported_claim_terms_fail_per_family() -> None:
+    """Verifies rejection of unsupported claim terms across each term family."""
+    facts = _make_dummy_facts()
+
+    claim_terms = [
+        "decay",
+        "theta",
+        "vega",
+        "volatility",
+        "implied volatility",
+        "IV",
+        "premium erosion",
+        "time value",
+        "sentiment",
+        "news",
+        "earnings",
+        "expiry effect",
+    ]
+
+    for term in claim_terms:
+        narrative = _make_valid_narrative()
+        narrative["habits"][0]["explanation"] += f" This was caused by {term}."
+        report = verify_narrative(narrative, facts)
+        assert report.passed is False, f"Failed to reject unsupported claim term: {term}"
+        assert any(
+            f["kind"] == "unsupported_claim" for f in report.failures
+        ), f"Missing unsupported_claim failure for term '{term}'"
+
+
+def test_all_five_templates_pass_verifier_cleanly() -> None:
+    """Verifies that templates for all five habits pass verify_narrative without error."""
+    from app.llm.templates import generate_template_narrative
+    from app.ranking import RankedHabit, RankedResult
+
+    habits = [
+        RankedHabit(
+            key="holding_losers",
+            name="Holding losers",
+            flagged_trade_ids=["P0001"],
+            estimated_cost_inr=10000.0,
+            confidence=1.0,
+            metrics={
+                "median_winner_hold_min": 20.0,
+                "flagged_median_hold_min": 60.0,
+                "flagged_count": 5,
+            },
+            formula_note="",
+            attributed_cost_inr=10000.0,
+            overlap_share=0.0,
+        ),
+        RankedHabit(
+            key="revenge_trading",
+            name="Revenge trading",
+            flagged_trade_ids=["P0002"],
+            estimated_cost_inr=8000.0,
+            confidence=1.0,
+            metrics={"avg_gap_minutes": 5.0, "flagged_entries": 4},
+            formula_note="",
+            attributed_cost_inr=8000.0,
+            overlap_share=0.0,
+        ),
+        RankedHabit(
+            key="overtrading",
+            name="Overtrading",
+            flagged_trade_ids=["P0003"],
+            estimated_cost_inr=6000.0,
+            confidence=0.8,
+            metrics={
+                "spike_day_count": 2,
+                "avg_trades_on_spike_days": 15.0,
+                "median_daily_trades": 5.0,
+                "excess_trades": 10,
+            },
+            formula_note="",
+            attributed_cost_inr=6000.0,
+            overlap_share=0.0,
+        ),
+        RankedHabit(
+            key="oversizing",
+            name="Oversizing",
+            flagged_trade_ids=["P0004"],
+            estimated_cost_inr=5000.0,
+            confidence=1.0,
+            metrics={"median_lots": 1.0, "flagged_entries": 3},
+            formula_note="",
+            attributed_cost_inr=5000.0,
+            overlap_share=0.0,
+        ),
+        RankedHabit(
+            key="averaging_down",
+            name="Averaging down",
+            flagged_trade_ids=["P0005"],
+            estimated_cost_inr=4000.0,
+            confidence=1.0,
+            metrics={"flagged_entries": 3},
+            formula_note="",
+            attributed_cost_inr=4000.0,
+            overlap_share=0.0,
+        ),
+    ]
+
+    ranked = RankedResult(
+        habits=habits,
+        total_attributed_cost_inr=33000.0,
+        overlaps=[],
+        dropped=[],
+        material=True,
+        reason=None,
+        context={
+            "n_trades": 100,
+            "gross_pnl_inr": -50000.0,
+            "gross_loss_inr": 80000.0,
+            "win_rate": 0.4,
+        },
+    )
+
+    from app.narrative import build_facts
+
+    facts = build_facts(ranked, trades=[])
+    narrative = generate_template_narrative(ranked)
+
+    report = verify_narrative(narrative, facts)
+    assert report.passed is True, f"Template verification failed: {report.failures}"
+
+
+def test_derived_rules_differ_for_different_traders() -> None:
+    """Verifies holding_losers time stop derives from trader's median winner hold (12m vs 90m)."""
+    from app.llm.templates import get_approved_rule
+
+    # Trader A: median winner hold 12m -> rounded to nearest 5m is 10m
+    rule_a = get_approved_rule("holding_losers", {"median_winner_hold_min": 12.0})
+    assert "10 minutes" in rule_a
+
+    # Trader B: median winner hold 90m -> rounded to nearest 5m is 90m
+    rule_b = get_approved_rule("holding_losers", {"median_winner_hold_min": 90.0})
+    assert "90 minutes" in rule_b
+
+    assert rule_a != rule_b
+
+
+def test_changing_median_daily_changes_overtrading_cap() -> None:
+    """Verifies that overtrading daily cap equals ceil(median_daily_trades) + 1."""
+    from app.llm.templates import get_approved_rule
+
+    # Case 1: median_daily = 3.2 -> ceil(3.2) + 1 = 5
+    rule_1 = get_approved_rule("overtrading", {"median_daily_trades": 3.2})
+    assert "5 completed trades" in rule_1
+
+    # Case 2: median_daily = 6.1 -> ceil(6.1) + 1 = 8
+    rule_2 = get_approved_rule("overtrading", {"median_daily_trades": 6.1})
+    assert "8 completed trades" in rule_2
+
+    assert rule_1 != rule_2

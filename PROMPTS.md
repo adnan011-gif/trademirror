@@ -1220,3 +1220,58 @@ afterwards. Never commit .env, API keys, or node_modules. If tests fail, do not
 commit; fix first.
 
 Result: worked. Orchestrator implemented in backend/app/narrative.py with build_facts and generate_narrative. Grounding verifier in backend/app/verifier.py checks numbers (Indian/western grouping, lakh/k suffixes, percentages, multiples, ordinals), trade IDs, dates, structure, and forbidden phrases. Deterministic templates in backend/app/llm/templates.py with fixed approved rules. Unified client in backend/app/llm/client.py. All 153 tests pass with network-blocking autouse fixture in conftest.py. Template self-consistency proved on all 8 committed datasets. Plausibility check: all ratios <= 1.0 (max 0.5933 on mixed.csv). Manual smoke runs and verifies cleanly.
+
+## Prompt 7b: wording and rule fixes
+
+Step 7b: small corrections to the narrative layer. Do not touch detectors, ranking,
+the generator, committed datasets, or verifier logic other than the blocklist below.
+If anything unexpected comes up, STOP and report. In your final summary list every
+file changed (expected: templates.py, verifier.py, tests, PROMPTS.md only).
+
+A) Remove unsupported claims from templates.
+The holding_losers template says "in excess decay". Remove it. Templates may only
+state what the detector computed. Reword each cost phrase to say what it measures:
+- holding_losers: "extra loss beyond what you normally lose on a losing trade"
+- revenge_trading: "net loss on these re-entries"
+- overtrading: "net loss on the extra trades"
+- oversizing: "extra loss attributable to the larger size"
+- averaging_down: "net loss on the added positions"
+The summary sentence should say "combined attributed cost" once and the habit
+sentences should carry the precise definition. Keep every number grounded as before.
+
+B) Tighten the verifier blocklist.
+Add a second named constant UNSUPPORTED_CLAIM_TERMS (case-insensitive, whole-word
+matching): decay, theta, vega, volatility, implied volatility, IV, premium erosion,
+time value, sentiment, news, earnings, expiry effect. A narrative containing any of
+them fails with kind "unsupported_claim". Add one test per term family and one test that
+all five templates pass cleanly.
+
+C) Derive rule numbers from the trader's own data.
+- holding_losers rule: the time stop equals the trader's median winner hold, rounded
+  to the nearest 5 minutes, minimum 5. Example text: "Exit any losing trade that has
+  not recovered within N minutes of entry, which is about how long your winning trades
+  last."
+- overtrading rule: the daily cap equals ceil(median_daily_trades) + 1. Tell me whether
+  this was already derived or hard-coded.
+- revenge_trading, oversizing, averaging_down: tell me for each whether its rule
+  contains a number and where that number comes from. Keep fixed constants only where
+  the number is a rule of thumb rather than a property of the trader (for example a
+  30-minute cooldown), and say so in a template comment.
+Every derived number must appear in the facts bundle's allowed_numbers and in the
+habit's approved_rule so the verifier accepts it. Add tests: two different traders
+(median winner hold 12 vs 90 minutes) get different time stops; the derived rule
+passes the verifier; changing median_daily changes the cap.
+
+D) Re-run and print
+- the full test suite (the self-consistency test over all datasets must still pass)
+- `python -m app.narrative data/datasets/mixed.csv` and
+  `python -m app.narrative data/datasets/single_overtrading.csv`, full output
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 7b: wording and rule
+fixes" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, commit "fix(narrative): remove
+unsupported claims, derive rules from trader data" and push to origin main. Show me
+`git status` and `git log --oneline -3`. Never commit .env, API keys, or node_modules.
+
+Result: worked. Templates updated with exact detector cost descriptions removing "in excess decay". UNSUPPORTED_CLAIM_TERMS added to verifier with whole-word regex matching. Dynamic derived rules implemented: holding_losers time stop derives from median winner hold (nearest 5m, min 5) and overtrading cap derives from ceil(median_daily_trades) + 1. All derived numbers included in facts allowed_numbers. All 157 tests pass, including new verifier unit tests and full-dataset self-consistency. Manual smoke runs cleanly on mixed.csv and single_overtrading.csv.

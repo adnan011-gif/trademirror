@@ -1468,4 +1468,136 @@ and `git log --oneline -3`. Never commit .env, API keys, or node_modules.
 
 Result: worked. Sample whitelist descriptions rewritten strictly to ground truth without options-pricing terms and tested against UNSUPPORTED_CLAIM_TERMS. Proxy-aware rate limiter implemented using TRUST_PROXY and TRUSTED_PROXY_HOPS counting from right of X-Forwarded-For, safely falling back to direct socket IP on missing/malformed headers. Settings added to config and .env.example with Render comment. Privacy note updated in README.md. All 171 tests pass, ruff clean.
 
+## Prompt 9: Frontend
+
+Step 9: build the React frontend against the real API. Files already in the tree:
+frontend/src/{index.css, main.tsx, App.tsx, types/index.ts, services/api.ts,
+components/{UploadDropzone, SampleDataSelector, HabitCard, TradeEvidenceModal,
+NextMonthRuleBadge}.tsx}. Additions allowed: frontend/src/components/{Headline,
+WarningsBanner, DisclaimerFooter, CalcDrawer}.tsx and test files only.
+
+RULES: do not touch anything under backend/, data/, or evals/. All API calls use
+relative paths (/api/...); never an absolute URL or localhost in source. No external
+CDNs, web fonts, analytics, or remote images; use the system font stack. No
+localStorage or sessionStorage. Strict TypeScript, no `any`. If the API response does
+not match what is described here, STOP and report the mismatch instead of guessing.
+In your final summary list every file changed outside frontend/ and PROMPTS.md
+(expected: none).
+
+TYPES (types/index.ts): mirror the API analysis response exactly, as described in
+Prompt 8 (dataset, context, material, summary, habits[] with evidence_trades,
+evidence_total, evidence_truncated, overlaps, dropped, warnings, warnings_total,
+pairing_anomalies, narrative, verification, detector_errors, disclaimers), and the
+/api/samples entries {name, label, description}. Write a runtime guard
+isAnalysisResponse() that checks the essential fields; if the guard fails, show the
+generic error state, never a blank page.
+
+SERVICE (services/api.ts): fetchSamples(), analyzeSample(name), analyzeUpload(file).
+Each returns a typed result or throws an ApiError carrying status, message, and
+request id (from the X-Request-ID header or the error body). Use AbortController with
+a 60 second timeout. Map 413, 422, 429, and 5xx to plain-English messages that include
+the server's message where it is safe (for example the column names for a 422), and
+show the request id in small text for support.
+
+SCREENS AND BEHAVIOUR
+
+1) Landing (App.tsx, UploadDropzone, SampleDataSelector)
+- One-line promise: "Find the two or three habits costing you the most money, from a
+  month of your own orders."
+- Primary action, visually dominant: "Try a sample month" with a SampleDataSelector
+  listing the labels from /api/samples (default selection: mixed). One click runs it.
+- Secondary: drag-and-drop CSV upload that is also a labelled button (keyboard
+  accessible). Client-side checks before upload: .csv extension and size <= 5 MB, with
+  friendly messages. Below it, an expandable "What columns do I need?" listing the 11
+  canonical columns.
+- Privacy line: "Your file is analysed in memory and is not stored." (This is true per
+  the backend spec; if the API says otherwise, STOP.)
+
+2) Loading
+- Skeleton cards, not a bare spinner. If no response after 5 seconds, show: "Waking up
+  the server. The first request after a quiet period can take up to a minute." Respect
+  prefers-reduced-motion. Disable the actions while loading and announce state changes
+  with an aria-live region.
+
+3) Results
+- Headline component: if material, "{N} habit(s) cost you about ₹X this month"
+  (X = context.total_attributed_cost_inr, formatted with Indian grouping and no
+  decimals), with a muted line: "{n_trades} trades, {win_rate}% winners, gross P&L ₹Y."
+  Show gross P&L with a sign and a neutral colour; do not use celebratory or alarming
+  styling. If the month's gross P&L is positive while habit costs are reported, add one
+  plain line: "Your month was profitable overall; these costs are what these habits took
+  out of it."
+- Habit cards (HabitCard) in rank order. Each card shows: rank and name; the
+  attributed cost large; if overlap_share > 0, a small secondary line "₹{estimated}
+  before removing overlap with {other habit}" with a tooltip or expander explaining that
+  trades flagged by two habits are counted once, under the higher-ranked habit; the
+  explanation text; the rule in a NextMonthRuleBadge (visually distinct, labelled "Next
+  month's rule"); a confidence label (High at >= 0.75, Medium at >= 0.4, Low below,
+  with the numeric value in a title attribute); a "Show the trades" button; a "How we
+  calculated this" button.
+- CalcDrawer: shows formula_note, then a readable key-value list of the metrics (humanise
+  the keys, format numbers sensibly, no raw JSON), then a one-line note about what the
+  cost measures for this habit (the five definitions from the narrative templates).
+- TradeEvidenceModal: an accessible dialog (role="dialog", aria-modal, labelled, focus
+  moves in and is restored on close, Escape closes, focus is trapped). A table with date,
+  scrip (symbol, strike, CE/PE), direction, lots, hold time, P&L (red/green plus a +/-
+  sign so colour is not the only cue). Show "Showing the {shown} largest losses of
+  {evidence_total} flagged trades" when truncated. Table scrolls horizontally inside its
+  own container on narrow screens.
+- A "Source" chip: "Explained by template" or "Written by AI and checked against your
+  numbers", from narrative.source, with a tooltip describing the check. Do not claim
+  the check when verification.passed is false.
+- WarningsBanner: if warnings_total > 0, a collapsible banner "We skipped or adjusted
+  {warnings_total} rows" listing up to 10 messages, plus the counts (duplicates,
+  rejected, missing_price, invalid) from dataset.counts.
+- Not-material state: friendly, non-judgemental message from summary, with the dataset
+  context numbers, and a "Try another month" button.
+- DisclaimerFooter: render the disclaimers array verbatim, always visible on results.
+- A "Start over" button returns to the landing screen.
+
+4) Errors: a single ErrorPanel with the plain-English message, the request id in small
+text, and a "Try again" action. 429 shows the retry time from Retry-After if available.
+
+DESIGN
+- Calm and restrained: one accent colour, a neutral palette, generous spacing,
+  system-ui font stack, 16px base, line-height 1.5, tabular numbers for money. Support
+  prefers-color-scheme: dark with CSS variables for every colour. Contrast at least WCAG
+  AA. Visible focus rings. Touch targets at least 44px. Mobile-first: works at 360px
+  wide with no horizontal page scroll; cards stack; the modal becomes a full-screen
+  sheet on narrow screens. Add a proper <title>, meta description, lang attribute, and
+  viewport tag. Money is formatted en-IN. No emojis in the UI text.
+
+TESTS (vitest + @testing-library/react, API mocked by stubbing fetch; add as dev
+dependencies; add `npm test` and a `make web-test` target)
+- landing renders and the sample button calls analyzeSample("mixed")
+- results screen from a fixture shaped like the mixed response: headline shows the
+  right total, three cards in rank order, the overlap line appears only on the
+  habit with overlap_share > 0
+- not-material fixture shows the friendly state and no cards
+- evidence modal opens, shows the truncation note, closes on Escape and returns focus
+- 413/422/429/500 responses map to the right messages and show the request id
+- the cold-start message appears after 5 seconds (fake timers)
+- upload with a non-.csv file is rejected client-side without calling the API
+- the isAnalysisResponse guard rejects a malformed payload and the error panel shows
+Fixtures live in frontend/src/test/fixtures.ts and are hand-written, not copied from
+files outside frontend/.
+
+VERIFY
+- `npm run build` has zero type errors; `npm test` passes.
+- Serve the build through FastAPI (make build, then the backend) and, using the real
+  API at http://localhost:8000, click through: the mixed sample, the clean sample,
+  the messy sample, and an upload of messy.csv. Describe in the summary what you
+  saw for each (headline, number of cards, whether warnings appeared). If you have a
+  headless browser available, also take screenshots at 360px and 1280px widths of the
+  mixed result and save them to docs/screenshots/ (create the folder), and list them.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 9: Frontend" with a
+"Result:" line. Do not tidy my wording.
+
+GIT: when `npm run build`, `npm test`, `make test`, and `ruff check .` pass, commit
+"feat(ui): sample and upload flows, habit cards, evidence modal" and push to origin
+main. Show me `git status` and `git log --oneline -3`. Never commit .env, API keys,
+node_modules, or frontend/dist.
+
+Result: worked. Frontend built with strict TypeScript and vanilla CSS adhering to calm/restrained design system, dark mode, tabular numbers, and accessible focus rings. All components implemented: UploadDropzone, SampleDataSelector, HabitCard with overlap note, NextMonthRuleBadge, CalcDrawer, accessible TradeEvidenceModal, Headline, WarningsBanner, and DisclaimerFooter. Full test suite with 8 tests passing under Vitest + Testing Library. Verified against real FastAPI server at localhost:8000 for mixed, clean, messy samples and messy.csv upload. Screenshots captured and saved to docs/screenshots/.
 

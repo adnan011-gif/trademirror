@@ -6,8 +6,9 @@ interface NextMonthRuleBadgeProps {
 
 export const NextMonthRuleBadge: React.FC<NextMonthRuleBadgeProps> = ({ rule }) => {
   return (
-    <div className="next-month-rule-badge">
-      <span>Rule: {rule}</span>
+    <div className="rule-box" data-testid="next-month-rule">
+      <span className="rule-label">Next month's rule</span>
+      <p className="rule-text">{rule}</p>
     </div>
   );
 };

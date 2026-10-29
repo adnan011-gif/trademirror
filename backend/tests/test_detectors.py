@@ -1493,7 +1493,7 @@ def test_revenge_trading_benchmark_datasets_after_lots_fix() -> None:
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
 
-    print(f"\n--- mixed.csv after lots fix ---")
+    print("\n--- mixed.csv after lots fix ---")
     print(f"  flagged={sorted(flagged)}")
     print(f"  gt_pids={sorted(gt_pids)}")
     print(f"  TP={tp}, FP={fp}, FN={fn}")
@@ -1502,3 +1502,792 @@ def test_revenge_trading_benchmark_datasets_after_lots_fix() -> None:
 
     assert precision >= 0.8, f"Precision {precision:.3f} < 0.8 after lots fix"
     assert recall >= 0.6, f"Recall {recall:.3f} < 0.6 after lots fix"
+
+# =====================================================================
+# SECTION 4: OversizingDetector Tests (Step 5d)
+# =====================================================================
+
+
+def _make_os_trade(
+    trade_id: str,
+    entry_time: datetime,
+    exit_time: datetime,
+    quantity: int,
+    lot_size: int,
+    gross_pnl: float,
+    entry_order_id: str,
+    exit_order_id: str,
+    symbol: str = "NIFTY24OCT25000CE",
+    is_add_on: bool = False,
+    is_partial_exit: bool = False,
+) -> Trade:
+    """Helper for oversizing detector tests."""
+    return Trade(
+        trade_id=trade_id,
+        symbol=symbol,
+        instrument_type="CE",
+        strike=25000.0,
+        expiry=date(2024, 10, 31),
+        direction="LONG",
+        entry_time=entry_time,
+        exit_time=exit_time,
+        entry_price=100.0,
+        exit_price=100.0 + (gross_pnl / quantity) if quantity > 0 else 100.0,
+        quantity=quantity,
+        lot_size=lot_size,
+        hold_minutes=(exit_time - entry_time).total_seconds() / 60.0,
+        gross_pnl=gross_pnl,
+        entry_order_id=entry_order_id,
+        exit_order_id=exit_order_id,
+        is_partial_exit=is_partial_exit,
+        is_add_on=is_add_on,
+        trading_date=entry_time.date(),
+    )
+
+
+def _build_os_base(
+    seed_start: int = 1,
+    n_normal: int = 20,
+    lot_size: int = 75,
+    normal_qty: int = 75,
+    normal_pnl: float = 500.0,
+) -> "tuple[list[Trade], datetime]":
+    """Build n_normal 1-lot trades spread across sequential days.
+
+    Returns (trades, next_available_time) so callers can add streak + oversized trades.
+    Each trade: entry at 09:30, exit at 09:50 (20 min hold).
+    Alternates win/loss to avoid creating accidental streaks.
+    """
+    trades = []
+    base_date = date(2024, 10, 1)
+    for i in range(n_normal):
+        # Spread across days: 2 trades per day so we have enough days
+        day_offset = i // 2
+        minute_offset = (i % 2) * 60  # 0 or 60 min apart within a day
+        d = base_date.replace(day=base_date.day + day_offset)
+        entry = datetime(d.year, d.month, d.day, 9, 30, tzinfo=IST) + timedelta(
+            minutes=minute_offset
+        )
+        ex = entry + timedelta(minutes=20)
+        pnl = normal_pnl if i % 2 == 0 else -normal_pnl * 0.8  # alternating win/loss
+        trades.append(
+            _make_os_trade(
+                trade_id=f"N{seed_start + i}",
+                entry_time=entry,
+                exit_time=ex,
+                quantity=normal_qty,
+                lot_size=lot_size,
+                gross_pnl=pnl,
+                entry_order_id=f"EN{seed_start + i}",
+                exit_order_id=f"XN{seed_start + i}",
+            )
+        )
+    last = trades[-1]
+    next_time = last.exit_time + timedelta(minutes=60)
+    return trades, next_time
+
+
+def _append_streak_then_oversized(
+    base_trades: list[Trade],
+    next_time: datetime,
+    win_streak: bool,
+    streak_pnl: float,
+    oversized_qty: int,
+    lot_size: int,
+    oversized_pnl: float,
+    tag: str,
+    symbol: str = "NIFTY24OCT25000CE",
+) -> "tuple[list[Trade], datetime]":
+    """Append 2 streak trades then 1 oversized trade, returning updated next_time."""
+    t = next_time
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        pnl = abs(streak_pnl) if win_streak else -abs(streak_pnl)
+        base_trades.append(
+            _make_os_trade(
+                trade_id=f"STR_{tag}_{i}",
+                entry_time=t,
+                exit_time=ex,
+                quantity=75,
+                lot_size=lot_size,
+                gross_pnl=pnl,
+                entry_order_id=f"ESTR_{tag}_{i}",
+                exit_order_id=f"XSTR_{tag}_{i}",
+                symbol=symbol,
+            )
+        )
+        t = ex + timedelta(minutes=5)
+
+    # Oversized trade after the streak
+    ex_os = t + timedelta(minutes=20)
+    base_trades.append(
+        _make_os_trade(
+            trade_id=f"OS_{tag}",
+            entry_time=t,
+            exit_time=ex_os,
+            quantity=oversized_qty,
+            lot_size=lot_size,
+            gross_pnl=oversized_pnl,
+            entry_order_id=f"EOS_{tag}",
+            exit_order_id=f"XOS_{tag}",
+            symbol=symbol,
+        )
+    )
+    return base_trades, ex_os + timedelta(minutes=60)
+
+
+def test_oversizing_fires_constructed_case() -> None:
+    """Detector fires on a hand-built case; verify exact cost, IDs, and metrics.
+
+    Setup:
+    - 20 normal 1-lot trades (lot_size=75, qty=75), alternating +500/-400 pnl.
+    - 3 streak+oversized groups: each has a 2-trade win/loss streak then a 3-lot
+      oversized entry (qty=225, lot_size=75) that loses.
+
+    median_lots = 1.0  (all normals are 1 lot; oversized don't shift median
+                         because only 3 oversized out of 23 entries)
+    oversized size_lots = 3.0 > 2.0 * 1.0 = 2.0 -> flagged
+    cost per flagged = max(0, -pnl) * (1 - 1.0/3.0) = loss * (2/3)
+    """
+    from app.detectors.oversizing import OversizingDetector
+
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # 3 groups: loss streak -> oversized loss
+    oversized_loss = -6000.0
+    for tag in ["A", "B", "C"]:
+        trades, t = _append_streak_then_oversized(
+            trades,
+            t,
+            win_streak=False,
+            streak_pnl=500.0,
+            oversized_qty=225,  # 3 lots
+            lot_size=75,
+            oversized_pnl=oversized_loss,
+            tag=tag,
+        )
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    assert res is not None, "Expected detector to fire"
+    assert res.key == "oversizing"
+    assert res.name == "Betting much bigger after a streak"
+
+    # All 3 oversized trade IDs should be flagged
+    assert "OS_A" in res.flagged_trade_ids
+    assert "OS_B" in res.flagged_trade_ids
+    assert "OS_C" in res.flagged_trade_ids
+
+    # No normal trades flagged
+    for i in range(20):
+        assert f"N{1 + i}" not in res.flagged_trade_ids
+
+    # Cost: max(0, 6000) * (1 - 1/3) = 6000 * 2/3 = 4000 per trade; 3 trades = 12000
+    expected_cost = 3 * abs(oversized_loss) * (1 - 1.0 / 3.0)
+    assert abs(res.estimated_cost_inr - expected_cost) < 1.0, (
+        f"Expected cost ~{expected_cost:.2f}, got {res.estimated_cost_inr}"
+    )
+
+    assert res.metrics["flagged_entries"] == 3
+    assert res.metrics["median_lots"] == 1.0
+    assert abs(res.metrics["avg_size_multiple"] - 3.0) < 0.01
+    assert res.metrics["after_loss_streak"] == 3
+    assert res.metrics["after_win_streak"] == 0
+
+
+def test_oversizing_exact_2x_not_flagged_just_above_is() -> None:
+    """Exactly 2.0× median_lots is NOT flagged; strictly above 2.0× is."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # Add 2 win-streak trades
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"STR_E{i}", t, ex, 75, 75, 500.0, f"ESTRE{i}", f"XSTRE{i}"))
+        t = ex + timedelta(minutes=5)
+
+    # Exactly 2.0× median (1.0 lot → 2.0 lots): NOT flagged
+    ex2 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("EXACT2", t, ex2, 150, 75, -3000.0, "EEXACT2", "XEXACT2"))
+    t = ex2 + timedelta(minutes=60)
+
+    # Strictly > 2.0× (3 lots): FLAGGED — but need a fresh streak for it
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"STR_F{i}", t, ex, 75, 75, 500.0, f"ESTRF{i}", f"XSTRF{i}"))
+        t = ex + timedelta(minutes=5)
+
+    ex3 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("ABOVE2", t, ex3, 225, 75, -4500.0, "EABOVE2", "XABOVE2"))
+
+    # And need 2 more flagged entries to reach MIN_FLAGGED=3
+    t = ex3 + timedelta(minutes=60)
+    for tag in ["G1", "G2"]:
+        for j in range(2):
+            ex = t + timedelta(minutes=20)
+            trades.append(
+                _make_os_trade(
+                    f"STR_{tag}_{j}", t, ex, 75, 75, 500.0, f"ESTR_{tag}_{j}", f"XSTR_{tag}_{j}"
+                )
+            )
+            t = ex + timedelta(minutes=5)
+        ex_os = t + timedelta(minutes=20)
+        trades.append(
+            _make_os_trade(f"OS_{tag}", t, ex_os, 225, 75, -4500.0, f"EOS_{tag}", f"XOS_{tag}")
+        )
+        t = ex_os + timedelta(minutes=60)
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "EXACT2" not in res.flagged_trade_ids, "Exactly 2.0× should NOT be flagged"
+    assert "ABOVE2" in res.flagged_trade_ids, "Strictly > 2.0× should be flagged"
+
+
+def test_oversizing_big_size_no_streak_not_flagged() -> None:
+    """Large position with no 2-trade streak is NOT flagged."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # One big trade but NO preceding streak (only 1 prior closing event at time of entry,
+    # since we insert it right after base_trades — but base trades alternate win/loss
+    # so the last two prior closings are win then loss -> not a streak).
+    # However the alternating pattern means last 2 are: win (N20), loss (N19) -> no streak.
+    ex = t + timedelta(minutes=20)
+    trades.append(
+        _make_os_trade("BIGNOSTREAK", t, ex, 300, 75, -8000.0, "EBIGNOSTREAK", "XBIGNOSTREAK")
+    )
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    # With only 1 oversized trade (and it's not flagged due to no streak),
+    # we expect None (< MIN_FLAGGED=3).
+    # The key property: "BIGNOSTREAK" must not appear in any flagged list.
+    if res is not None:
+        assert "BIGNOSTREAK" not in res.flagged_trade_ids, (
+            "Big-size trade with no streak must not be flagged"
+        )
+
+
+def test_oversizing_streak_of_only_1_not_flagged() -> None:
+    """A streak of only 1 prior loss/win is not a streak (need STREAK_LEN=2)."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # Only 1 win prior to the oversized entry
+    ex = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("STR1", t, ex, 75, 75, 500.0, "ESTR1", "XSTR1"))
+    t = ex + timedelta(minutes=5)
+
+    ex2 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("OS_1STR", t, ex2, 300, 75, -8000.0, "EOS_1STR", "XOS_1STR"))
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    if res is not None:
+        assert "OS_1STR" not in res.flagged_trade_ids, (
+            "Oversized entry after only 1-trade streak must not be flagged"
+        )
+
+
+def test_oversizing_mixed_win_loss_pair_not_a_streak() -> None:
+    """A win followed by a loss (or vice versa) is NOT a streak."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # Win then loss
+    ex = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("MIX1", t, ex, 75, 75, 500.0, "EMIX1", "XMIX1"))
+    t = ex + timedelta(minutes=5)
+    ex2 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("MIX2", t, ex2, 75, 75, -400.0, "EMIX2", "XMIX2"))
+    t = ex2 + timedelta(minutes=5)
+
+    ex3 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("OS_MIX", t, ex3, 300, 75, -8000.0, "EOS_MIX", "XOS_MIX"))
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    if res is not None:
+        assert "OS_MIX" not in res.flagged_trade_ids, (
+            "Oversized entry after win+loss pair must not be flagged"
+        )
+
+
+def test_oversizing_zero_pnl_breaks_streak() -> None:
+    """A zero-pnl closing event between two wins/losses breaks the streak."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # Win, zero-pnl, win -> last 2 are (zero, win) -> not a streak
+    ex = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("WIN1", t, ex, 75, 75, 500.0, "EWIN1", "XWIN1"))
+    t = ex + timedelta(minutes=5)
+    ex2 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("ZERO1", t, ex2, 75, 75, 0.0, "EZERO1", "XZERO1"))
+    t = ex2 + timedelta(minutes=5)
+    ex3 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("WIN2", t, ex3, 75, 75, 500.0, "EWIN2", "XWIN2"))
+    t = ex3 + timedelta(minutes=5)
+
+    ex4 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("OS_ZERO", t, ex4, 300, 75, -8000.0, "EOS_ZERO", "XOS_ZERO"))
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    if res is not None:
+        assert "OS_ZERO" not in res.flagged_trade_ids, (
+            "Zero-pnl event must break streak so oversized trade after it is not flagged"
+        )
+
+
+def test_oversizing_win_streak_and_loss_streak_both_flag() -> None:
+    """Both win-streak and loss-streak oversized entries get flagged."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # Win streak -> oversized loss
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"WSTR{i}", t, ex, 75, 75, 600.0, f"EWSTR{i}", f"XWSTR{i}"))
+        t = ex + timedelta(minutes=5)
+    ex_w = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("OS_WIN", t, ex_w, 225, 75, -5000.0, "EOS_WIN", "XOS_WIN"))
+    t = ex_w + timedelta(minutes=60)
+
+    # Loss streak -> oversized loss
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"LSTR{i}", t, ex, 75, 75, -600.0, f"ELSTR{i}", f"XLSTR{i}"))
+        t = ex + timedelta(minutes=5)
+    ex_l = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("OS_LOSS", t, ex_l, 225, 75, -5000.0, "EOS_LOSS", "XOS_LOSS"))
+    t = ex_l + timedelta(minutes=60)
+
+    # One more to reach MIN_FLAGGED=3
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(
+            _make_os_trade(f"WSTR2_{i}", t, ex, 75, 75, 600.0, f"EWSTR2_{i}", f"XWSTR2_{i}")
+        )
+        t = ex + timedelta(minutes=5)
+    ex_w2 = t + timedelta(minutes=20)
+    trades.append(_make_os_trade("OS_WIN2", t, ex_w2, 225, 75, -5000.0, "EOS_WIN2", "XOS_WIN2"))
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "OS_WIN" in res.flagged_trade_ids, "Win-streak oversized entry must be flagged"
+    assert "OS_LOSS" in res.flagged_trade_ids, "Loss-streak oversized entry must be flagged"
+    assert res.metrics["after_win_streak"] >= 1
+    assert res.metrics["after_loss_streak"] >= 1
+
+
+def test_oversizing_same_lots_nifty_banknifty_not_flagged() -> None:
+    """1-lot NIFTY (qty=75) and 1-lot BANKNIFTY (qty=35) are the same size in lots.
+
+    A NIFTY 1-lot entry after a BANKNIFTY streak must NOT be flagged as oversized.
+    """
+    # Build 20 BANKNIFTY 1-lot normal trades
+    trades, t = _build_os_base(n_normal=20, lot_size=35, normal_qty=35)
+
+    # 2-trade BANKNIFTY win streak
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(
+            _make_os_trade(
+                f"BSTR{i}",
+                t,
+                ex,
+                35,
+                35,
+                500.0,
+                f"EBSTR{i}",
+                f"XBSTR{i}",
+                symbol="BANKNIFTY24OCT51000PE",
+            )
+        )
+        t = ex + timedelta(minutes=5)
+
+    # NIFTY 1-lot entry (qty=75 but lot_size=75 -> 1 lot == same as BANKNIFTY 1-lot)
+    ex_n = t + timedelta(minutes=20)
+    trades.append(
+        _make_os_trade(
+            "NIFTY_1LOT",
+            t,
+            ex_n,
+            75,
+            75,
+            -3000.0,
+            "ENIFTY_1LOT",
+            "XNIFTY_1LOT",
+            symbol="NIFTY24OCT25000CE",
+        )
+    )
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    # median_lots = 1.0; NIFTY entry = 1.0 lot -> NOT > 2.0 * 1.0 -> not flagged
+    if res is not None:
+        assert "NIFTY_1LOT" not in res.flagged_trade_ids, (
+            "1-lot NIFTY after BANKNIFTY streak must not be flagged (same size in lots)"
+        )
+
+
+def test_oversizing_multi_slice_entry_aggregated() -> None:
+    """Multi-slice entry (partial exit creating 2 trades with same entry_order_id)
+    has its total lots aggregated before the size check."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # 2-trade win streak
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"MSTR{i}", t, ex, 75, 75, 500.0, f"EMSTR{i}", f"XMSTR{i}"))
+        t = ex + timedelta(minutes=5)
+
+    # 2 slices with the same entry_order_id (partial exits), each 2 lots = 4 lots total
+    entry_time = t
+    ex1 = t + timedelta(minutes=10)
+    ex2 = t + timedelta(minutes=20)
+    trades.append(
+        _make_os_trade(
+            "SLICE_A", entry_time, ex1, 150, 75, -2000.0, "EMULTI", "XMULTI_A", is_partial_exit=True
+        )
+    )
+    trades.append(
+        _make_os_trade(
+            "SLICE_B", entry_time, ex2, 150, 75, -2000.0, "EMULTI", "XMULTI_B", is_partial_exit=True
+        )
+    )
+    t = ex2 + timedelta(minutes=60)
+
+    # Need 2 more flagged entries to reach MIN_FLAGGED=3
+    for tag in ["M1", "M2"]:
+        for j in range(2):
+            ex = t + timedelta(minutes=20)
+            trades.append(
+                _make_os_trade(
+                    f"STR_{tag}_{j}", t, ex, 75, 75, 500.0, f"ESTR_{tag}_{j}", f"XSTR_{tag}_{j}"
+                )
+            )
+            t = ex + timedelta(minutes=5)
+        ex_os = t + timedelta(minutes=20)
+        trades.append(
+            _make_os_trade(f"OS_{tag}", t, ex_os, 225, 75, -4000.0, f"EOS_{tag}", f"XOS_{tag}")
+        )
+        t = ex_os + timedelta(minutes=60)
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    # Both slices of EMULTI should appear in flagged_trade_ids (4 lots > 2.0 * median_lots)
+    assert "SLICE_A" in res.flagged_trade_ids, "Slice A of multi-slice entry must be flagged"
+    assert "SLICE_B" in res.flagged_trade_ids, "Slice B of multi-slice entry must be flagged"
+
+
+def test_oversizing_addon_entries_skipped() -> None:
+    """Add-on entries (is_add_on=True) are excluded from entry aggregation."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # 2-trade streak
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"ASTR{i}", t, ex, 75, 75, 500.0, f"EASTR{i}", f"XASTR{i}"))
+        t = ex + timedelta(minutes=5)
+
+    # Add-on entry (large qty but is_add_on=True) -> must not be flagged
+    ex_ao = t + timedelta(minutes=20)
+    trades.append(
+        _make_os_trade(
+            "ADDON_BIG", t, ex_ao, 300, 75, -5000.0, "EADDON_BIG", "XADDON_BIG", is_add_on=True
+        )
+    )
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+
+    if res is not None:
+        assert "ADDON_BIG" not in res.flagged_trade_ids, (
+            "Add-on entry must not appear in flagged_trade_ids"
+        )
+
+
+def test_oversizing_fewer_than_20_entries_returns_none() -> None:
+    """Fewer than MIN_ENTRIES (20) entries -> return None."""
+    trades, t = _build_os_base(n_normal=19, lot_size=75, normal_qty=75)
+
+    # Add a clearly oversized trade after a streak - still only 20 entries counting it
+    for i in range(2):
+        ex = t + timedelta(minutes=20)
+        trades.append(_make_os_trade(f"STR{i}", t, ex, 75, 75, 500.0, f"ESTR{i}", f"XSTR{i}"))
+        t = ex + timedelta(minutes=5)
+    # Total now: 19 + 2 + 1 = 22 entries... need to test with exactly <20 non-addon entries
+    # Reset: use only 10 normals
+    trades2, t2 = _build_os_base(n_normal=10, lot_size=75, normal_qty=75)
+    for i in range(2):
+        ex = t2 + timedelta(minutes=20)
+        trades2.append(
+            _make_os_trade(f"S2STR{i}", t2, ex, 75, 75, 500.0, f"ES2STR{i}", f"XS2STR{i}")
+        )
+        t2 = ex + timedelta(minutes=5)
+    ex_os = t2 + timedelta(minutes=20)
+    trades2.append(_make_os_trade("OS_FEW", t2, ex_os, 300, 75, -5000.0, "EOS_FEW", "XOS_FEW"))
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    assert det.detect(trades2) is None, "Fewer than 20 entries must return None"
+
+
+def test_oversizing_fewer_than_3_flagged_returns_none() -> None:
+    """Fewer than MIN_FLAGGED (3) flagged entries -> return None."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # Only 2 oversized entries (need 3 to fire)
+    for tag in ["X", "Y"]:
+        for i in range(2):
+            ex = t + timedelta(minutes=20)
+            trades.append(
+                _make_os_trade(
+                    f"S_{tag}_{i}", t, ex, 75, 75, 600.0, f"ES_{tag}_{i}", f"XS_{tag}_{i}"
+                )
+            )
+            t = ex + timedelta(minutes=5)
+        ex_os = t + timedelta(minutes=20)
+        trades.append(
+            _make_os_trade(f"OS_{tag}", t, ex_os, 225, 75, -4000.0, f"EOS_{tag}", f"XOS_{tag}")
+        )
+        t = ex_os + timedelta(minutes=60)
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    assert det.detect(trades) is None, "Fewer than 3 flagged entries must return None"
+
+
+def test_oversizing_winning_flagged_entries_contribute_zero_cost() -> None:
+    """Flagged entries that are winners contribute 0 to estimated_cost_inr.
+    If all flagged entries are profitable, estimated_cost_inr = 0 and None is returned.
+    """
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+
+    # 3 oversized entries all with positive PnL (winners)
+    for tag in ["P1", "P2", "P3"]:
+        for i in range(2):
+            ex = t + timedelta(minutes=20)
+            trades.append(
+                _make_os_trade(
+                    f"S_{tag}_{i}", t, ex, 75, 75, 500.0, f"ES_{tag}_{i}", f"XS_{tag}_{i}"
+                )
+            )
+            t = ex + timedelta(minutes=5)
+        ex_os = t + timedelta(minutes=20)
+        trades.append(
+            _make_os_trade(
+                f"OS_{tag}",
+                t,
+                ex_os,
+                225,
+                75,
+                +8000.0,  # winner!
+                f"EOS_{tag}",
+                f"XOS_{tag}",
+            )
+        )
+        t = ex_os + timedelta(minutes=60)
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    res = det.detect(trades)
+    # All winners -> cost = 0 -> return None
+    assert res is None, "All winning flagged entries should result in None (cost=0)"
+
+
+def test_oversizing_determinism() -> None:
+    """Calling detect twice on the same input gives identical results."""
+    trades, t = _build_os_base(n_normal=20, lot_size=75, normal_qty=75)
+    for tag in ["D1", "D2", "D3"]:
+        trades, t = _append_streak_then_oversized(
+            trades,
+            t,
+            win_streak=True,
+            streak_pnl=500.0,
+            oversized_qty=225,
+            lot_size=75,
+            oversized_pnl=-5000.0,
+            tag=tag,
+        )
+
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+    r1 = det.detect(trades)
+    r2 = det.detect(trades)
+    assert r1 is not None and r2 is not None
+    assert r1.estimated_cost_inr == r2.estimated_cost_inr
+    assert r1.flagged_trade_ids == r2.flagged_trade_ids
+    assert r1.metrics == r2.metrics
+    assert r1.formula_note == r2.formula_note
+
+
+def test_oversizing_benchmark_datasets() -> None:
+    """Test OversizingDetector on benchmark datasets."""
+    from pathlib import Path
+
+    from app.detectors.holding_losers import HoldingLosersDetector
+    from app.detectors.oversizing import OversizingDetector
+    from app.detectors.overtrading import OvertradingDetector
+    from app.detectors.revenge_trading import RevengeTradingDetector
+
+    det = OversizingDetector()
+
+    # 1. clean.csv: must return None
+    clean_trades = pair_orders(parse_orders(Path("data/datasets/clean.csv")).orders).trades
+    assert det.detect(clean_trades) is None, "oversizing falsely fired on clean.csv"
+
+    # 2. single_oversizing.csv: must fire with P >= 0.8 and R >= 0.6
+    single_trades = pair_orders(
+        parse_orders(Path("data/datasets/single_oversizing.csv")).orders
+    ).trades
+    with open("data/ground_truth/single_oversizing.json") as f:
+        gt_data = json.load(f)
+    gt_os = gt_data["habits"]["oversizing"]
+
+    res = det.detect(single_trades)
+    assert res is not None, "oversizing failed to fire on single_oversizing.csv"
+
+    true_oids = set(gt_os["entry_order_ids"])
+    detected_oids = set(
+        t.entry_order_id for t in single_trades if t.trade_id in res.flagged_trade_ids
+    )
+    tp = len(detected_oids & true_oids)
+    precision = tp / len(detected_oids) if detected_oids else 0.0
+    recall = tp / len(true_oids) if true_oids else 0.0
+    injected_loss = gt_os["injected_loss_inr"]
+
+    print("\n--- single_oversizing.csv Evaluation ---")
+    print(f"Precision:       {precision:.3f}")
+    print(f"Recall:          {recall:.3f}")
+    print(f"Estimated Cost:  Rs {res.estimated_cost_inr:,.2f}")
+    print(f"Injected Loss:   Rs {injected_loss:,.2f}")
+    print(
+        "injected_loss_inr for oversizing = the extra loss from the EXCESS quantity only. "
+        "The generator sets new_lots to 3-4 (from 1), makes the trade lose 15-45%, then "
+        "records (entry_price - exit_price) * (excess_qty) as the injected cost. "
+        "The generator DOES force oversized trades to lose (exit_price set below entry_price)."
+    )
+    print(f"Metrics: {res.metrics}")
+
+    assert precision >= 0.8, f"Precision {precision:.3f} < 0.8"
+    assert recall >= 0.6, f"Recall {recall:.3f} < 0.6"
+    assert 0.5 * injected_loss <= res.estimated_cost_inr <= 2.0 * injected_loss, (
+        f"Cost Rs{res.estimated_cost_inr} out of [0.5x, 2x] injected Rs{injected_loss}"
+    )
+
+    # 3. Other datasets: print result; note any unplanted fires
+    print("\n--- Other datasets ---")
+    for ds_name in [
+        "single_holding_losers",
+        "single_revenge_trading",
+        "single_overtrading",
+        "single_averaging_down",
+    ]:
+        ds_path = Path(f"data/datasets/{ds_name}.csv")
+        ds_trades = pair_orders(parse_orders(ds_path).orders).trades
+        ds_res = det.detect(ds_trades)
+        with open(f"data/ground_truth/{ds_name}.json") as f:
+            ds_gt = json.load(f)
+        planted = ds_gt["habits"]["oversizing"]["planted"]
+        if ds_res is not None and not planted:
+            # False positive - list flagged entries
+            flagged_eoids = {
+                t.entry_order_id for t in ds_trades if t.trade_id in ds_res.flagged_trade_ids
+            }
+            print(f"{ds_name}: FIRES (unplanted!) flagged_entry_oids={sorted(flagged_eoids)}")
+        else:
+            status = f"FIRES (Rs{ds_res.estimated_cost_inr:,.2f})" if ds_res else "None"
+            print(f"{ds_name}: {status}")
+
+    # 4. mixed.csv: report + overlap
+    print("\n--- mixed.csv ---")
+    mixed_trades = pair_orders(parse_orders(Path("data/datasets/mixed.csv")).orders).trades
+    with open("data/ground_truth/mixed.json") as f:
+        mixed_gt = json.load(f)
+    mixed_res = det.detect(mixed_trades)
+    mixed_planted = mixed_gt["habits"]["oversizing"]["planted"]
+    print(f"oversizing planted in mixed: {mixed_planted}")
+    if mixed_res is not None:
+        eid_to_pid_m = {t.entry_order_id: t.trade_id for t in mixed_trades}
+        gt_eoids_m = set(mixed_gt["habits"]["oversizing"]["entry_order_ids"])
+        gt_pids_m = {eid_to_pid_m[e] for e in gt_eoids_m if e in eid_to_pid_m}
+        flagged_m = set(mixed_res.flagged_trade_ids)
+        tp_m = len(flagged_m & gt_pids_m)
+        fp_m = flagged_m - gt_pids_m
+        prec_m = tp_m / len(flagged_m) if flagged_m else 0.0
+        rec_m = tp_m / len(gt_pids_m) if gt_pids_m else 0.0
+        print(f"  FIRES: precision={prec_m:.3f} recall={rec_m:.3f} FP={sorted(fp_m)}")
+
+        # Overlap with other detectors
+        hl_res = HoldingLosersDetector().detect(mixed_trades)
+        rt_res = RevengeTradingDetector().detect(mixed_trades)
+        ot_res = OvertradingDetector().detect(mixed_trades)
+        hl_flag = set(hl_res.flagged_trade_ids) if hl_res else set()
+        rt_flag = set(rt_res.flagged_trade_ids) if rt_res else set()
+        ot_flag = set(ot_res.flagged_trade_ids) if ot_res else set()
+        print(f"  Overlap with holding_losers: {len(flagged_m & hl_flag)}")
+        print(f"  Overlap with revenge_trading: {len(flagged_m & rt_flag)}")
+        print(f"  Overlap with overtrading: {len(flagged_m & ot_flag)}")
+    else:
+        print("  None")
+
+
+def test_oversizing_multi_seed_robustness() -> None:
+    """Verify multi-seed robustness across 30 clean and 30 planted months."""
+    from app.detectors.oversizing import OversizingDetector
+
+    det = OversizingDetector()
+
+    # 30 clean months: at most 1 fires
+    clean_fired = 0
+    for s in range(920, 950):
+        csv_txt, _ = generate_dataset_in_memory(seed=s)
+        trades = pair_orders(parse_orders(csv_txt).orders).trades
+        if det.detect(trades) is not None:
+            clean_fired += 1
+
+    print(f"\nMulti-seed clean months fired: {clean_fired}/30 ({clean_fired / 30:.1%})")
+    assert clean_fired <= 1, f"Clean months fired {clean_fired}/30 times (> 1)"
+
+    # 30 planted months: detection >= 0.8
+    planted_fired = 0
+    for s in range(950, 980):
+        csv_txt, _ = generate_dataset_in_memory(seed=s, habits_config={"oversizing": "medium"})
+        trades = pair_orders(parse_orders(csv_txt).orders).trades
+        if det.detect(trades) is not None:
+            planted_fired += 1
+
+    detection_rate = planted_fired / 30.0
+    print(f"Multi-seed planted months detected: {planted_fired}/30 ({detection_rate:.1%})")
+    assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"

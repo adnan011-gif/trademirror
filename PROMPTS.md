@@ -667,3 +667,91 @@ in lots, not raw quantity", push to origin main, and show git status and git log
 
 Result: All checks passed. PART A: Only single_overtrading.*, mixed.*, messy.* changed in b160836; clean.* unchanged. Intensity: low=2 spike days, medium=3, high=5, each targets >=12 trades/day. holding_losers: precision=1.0/recall=1.0 on both datasets. revenge_trading single: precision=1.0/recall=0.923; mixed before fix: precision=0.75/recall=0.692 with FPs P0082/P0087/P0113 (cross-instrument 1-lot each). PART B: Added Trade.trade_lots property and aggregate_lots() to models.py; switched revenge_trading.py size comparison to lots. 5 new tests in Section 2b all pass. After fix mixed: FPs gone, precision/recall both improved. Multi-seed: clean 0/30 fires, planted 30/30 fires (100%). make data byte-identical.
 
+## Prompt 5d: oversizing detector
+
+Step 5d: implement ONLY the oversizing detector in
+backend/app/detectors/oversizing.py. Append a new section to
+backend/tests/test_detectors.py; do not touch earlier sections.
+
+RULES: thresholds below are fixed. Do NOT modify data/generator.py in this step. If
+a test or multi-seed run fails, STOP and report numbers and diagnosis (detector
+logic, threshold design, or generator) and let me decide. If you believe the
+generator needs a change, say so and wait. In your final summary state explicitly
+whether any threshold, existing test, generator file, or committed dataset was
+changed (expected: none).
+
+SIZE UNIT: always LOTS (quantity / lot_size), using the shared helper from 5c-fix.
+Never compare raw quantity across instruments.
+
+DEFINITION
+Habit: after a run of wins or losses, the trader takes a much bigger position than
+usual. Detector: class OversizingDetector(BaseDetector), key "oversizing", returning
+HabitResult | None. Gross P&L only (state in the docstring).
+
+DEFINITIONS USED BY THE FORMULA (document in the docstring)
+- Entry event: all Trade slices sharing the same entry_order_id as ONE entry; size =
+  total lots, pnl = sum of slice pnls. Skip add-ons (is_add_on = true).
+- Closing event: all slices sharing the same exit_order_id as one event (pnl = sum).
+  Order closing events by (exit_time, exit_order_id).
+- Streak before an entry: take the last STREAK_LEN (2) closing events with
+  exit_time <= entry_time. It is a streak if all have pnl > 0 (win streak) or all
+  have pnl < 0 (loss streak). A zero pnl breaks the streak. Fewer than 2 prior
+  closing events means no streak.
+
+FORMULA (named module constants)
+1. Require at least MIN_ENTRIES (20) entry events, else return None.
+2. median_lots = median size in lots over all entry events.
+3. An entry is FLAGGED when size_lots > SIZE_MULTIPLE (2.0) * median_lots (strictly
+   greater) AND it follows a streak.
+4. Require len(flagged) >= MIN_FLAGGED (3), else return None.
+5. flagged_trade_ids = Trade.trade_id of every slice of a flagged entry, sorted.
+6. estimated_cost_inr = sum over flagged entries of max(0, -entry_pnl) *
+   (1 - median_lots / size_lots). Meaning: the extra loss attributable to the larger
+   size, assuming a normal-size trade would have lost proportionally less. Round to
+   2 decimals. If the total is <= 0, return None. State in the docstring that this
+   assumes P&L scales linearly with size.
+7. confidence = min(1, flagged_entries / 8), rounded to 2.
+8. metrics = {n_entries, median_lots, flagged_entries, avg_size_multiple,
+   after_win_streak, after_loss_streak, flagged_net_pnl_inr, flagged_gross_loss_inr}.
+9. name "Betting much bigger after a streak"; formula_note = one plain paragraph a
+   trader can read with the actual numbers filled in.
+
+TESTS
+Hand-built Trade lists with hand-computed expectations:
+- fires on a constructed case: exact cost, ids, metrics
+- exactly 2.0x median is NOT flagged; just above is
+- big size with no streak is NOT flagged; streak of only 1 is not a streak; mixed
+  win/loss pair is not a streak; a zero-pnl trade breaks the streak
+- both win-streak and loss-streak cases flag
+- same lots on NIFTY (75) and BANKNIFTY (35) are the same size (no flag)
+- multi-slice entry aggregated; add-on entries skipped
+- fewer than 20 entries -> None; fewer than 3 flagged -> None
+- winning flagged entries contribute 0 to cost; all winners -> None
+- determinism
+
+DATASET TESTS (parse_orders -> pair_orders -> detect):
+- clean.csv: None
+- single_oversizing.csv: fires. Map flagged entries to ground-truth entry_order_ids:
+  assert precision >= 0.8 and recall >= 0.6; assert cost within 0.5x to 2.0x of
+  injected_loss_inr. Print precision, recall, cost, injected_loss_inr, and tell me
+  exactly what injected_loss_inr measures for this habit and whether the generator
+  forces oversized trades to lose.
+- mixed.csv and the other single_* datasets: do not assert. Print whether it fires
+  on each, and for any dataset where oversizing is not planted but it fires, list the
+  flagged entries and why (this would be a false positive or a habit interaction).
+  Also print overlap with the other detectors' flags on mixed.csv.
+
+MULTI-SEED (in memory, via generate_dataset_in_memory): 30 clean months seeds
+920-949 -> assert at most 1 fires; 30 months with oversizing planted at medium seeds
+950-979 -> assert detection >= 0.8. Print both. Confirm `make data` reproduces
+byte-identical committed files.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 5d: oversizing
+detector" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit
+with the message "feat(detectors): oversizing", and push to origin main. Show me
+`git status` and `git log --oneline -3` afterwards. Never commit .env, API keys, or
+node_modules. If tests fail, do not commit; fix first.
+
+Result: worked. Oversizing detector implemented in backend/app/detectors/oversizing.py with fixed thresholds (MIN_ENTRIES=20, SIZE_MULTIPLE=2.0, STREAK_LEN=2, MIN_FLAGGED=3). Single_oversizing.csv: precision=1.000, recall=0.950, cost=₹130,727.40 vs injected=₹135,033.90 (ratio 0.968, within [0.5, 2.0]). Clean.csv and all non-planted single_* datasets and mixed.csv: None (0 false positives). Multi-seed: clean 0/30 fires, planted 30/30 detected (100%). make data byte-identical. 89 tests pass, ruff clean.

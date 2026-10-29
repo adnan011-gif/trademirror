@@ -1,0 +1,114 @@
+{
+  "dataset": "single_oversizing",
+  "seed": 105,
+  "habits": {
+    "holding_losers": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "revenge_trading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "overtrading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "oversizing": {
+      "planted": true,
+      "intensity": "medium",
+      "trade_ids": [
+        "T0010",
+        "T0023",
+        "T0022",
+        "T0012",
+        "T0026",
+        "T0021",
+        "T0084",
+        "T0006",
+        "T0046",
+        "T0004",
+        "T0090",
+        "T0072",
+        "T0057",
+        "T0100",
+        "T0042",
+        "T0052",
+        "T0097",
+        "T0027",
+        "T0028",
+        "T0103"
+      ],
+      "entry_order_ids": [
+        "ORD00019",
+        "ORD00045",
+        "ORD00043",
+        "ORD00023",
+        "ORD00051",
+        "ORD00041",
+        "ORD00167",
+        "ORD00011",
+        "ORD00091",
+        "ORD00007",
+        "ORD00179",
+        "ORD00143",
+        "ORD00113",
+        "ORD00199",
+        "ORD00083",
+        "ORD00103",
+        "ORD00193",
+        "ORD00053",
+        "ORD00055",
+        "ORD00205"
+      ],
+      "exit_order_ids": [
+        "ORD00020",
+        "ORD00046",
+        "ORD00044",
+        "ORD00024",
+        "ORD00052",
+        "ORD00042",
+        "ORD00168",
+        "ORD00012",
+        "ORD00092",
+        "ORD00008",
+        "ORD00180",
+        "ORD00144",
+        "ORD00114",
+        "ORD00200",
+        "ORD00084",
+        "ORD00104",
+        "ORD00194",
+        "ORD00054",
+        "ORD00056",
+        "ORD00206"
+      ],
+      "injected_loss_inr": 135033.9
+    },
+    "averaging_down": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    }
+  },
+  "expected_ingest_warnings": {
+    "duplicates": 0,
+    "missing_price": 0,
+    "rejected": 0
+  }
+}

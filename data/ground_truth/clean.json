@@ -1,0 +1,51 @@
+{
+  "dataset": "clean",
+  "seed": 101,
+  "habits": {
+    "holding_losers": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "revenge_trading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "overtrading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "oversizing": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "averaging_down": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    }
+  },
+  "expected_ingest_warnings": {
+    "duplicates": 0,
+    "missing_price": 0,
+    "rejected": 0
+  }
+}

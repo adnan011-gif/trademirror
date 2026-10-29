@@ -121,3 +121,88 @@ origin main. Show me `git status` and `git log --oneline -3` afterwards. Never
 commit .env, API keys, or node_modules. If tests fail, do not commit; fix first.
 
 Result: worked
+
+## Prompt 2: Synthetic data generator
+
+Step 2: build the synthetic data generator. This is the foundation for our evals,
+so determinism and ground-truth accuracy matter more than realism.
+
+Files: data/generator.py, data/datasets/, data/ground_truth/,
+backend/tests/test_generator.py. Update pyproject.toml so pytest can import the
+`data` package (pythonpath = ["backend", "."]) and add data/__init__.py.
+
+DESIGN
+- Generate TRADES first (entry + exit), then emit ORDERS from them. Each trade has
+  a stable trade_id (T0001...), entry_order_id and exit_order_id.
+- Long-only option buying (BUY to open, SELL to close) on NIFTY and BANKNIFTY CE/PE.
+  Lot sizes are named constants (NIFTY=75, BANKNIFTY=35, illustrative). quantity =
+  lots * lot_size.
+- One fixed trading month, weekdays only, timestamps in IST (+05:30) between 09:15
+  and 15:30. Use a seeded random.Random; never use global randomness or the wall
+  clock.
+- Output CSV columns exactly: order_id, timestamp, symbol, instrument_type, strike,
+  expiry, side, quantity, lot_size, price, status. status = COMPLETE for normal rows.
+- P&L comes from price paths: entry premium 40-250, exit premium = entry * (1 +
+  return), returns drawn from a distribution giving ~45-55% win rate.
+
+BASELINE ("clean" trader) must NOT trigger any detector by construction:
+- 3-6 trades per day (never above ~1.5x the monthly median)
+- fixed 1-2 lots, with no size jump above 1.5x the median and none tied to streaks
+- hold times for winners and losers drawn from the SAME distribution
+- at least 45 minutes between a loss and the next entry
+- never add to an open position; one position open at a time
+Put these constraints in named constants and assert them in a test over clean.csv.
+
+PLANTED HABITS (each takes an intensity: low / medium / high controlling how many
+trades are affected) and records affected trades in ground truth:
+1. holding_losers: affected losers held >2x the median winner hold time.
+2. revenge_trading: after a losing close, re-enter within 15 min with quantity >=
+   1.5x the prior trade.
+3. overtrading: some days get >2x the median daily count; mark the excess trades.
+4. oversizing: after a 2+ trade win or loss streak, next trade quantity >2x median.
+5. averaging_down: add a second BUY in the same scrip while the open position is
+   below average entry; the add-on entry orders are the flagged ones.
+
+GROUND TRUTH JSON per dataset:
+{
+  "dataset": "...", "seed": 123,
+  "habits": {
+    "<habit_key>": {
+      "planted": true, "intensity": "medium",
+      "trade_ids": [...], "entry_order_ids": [...], "exit_order_ids": [...],
+      "injected_loss_inr": <float, the extra loss attributable to the habit>
+    }
+  },
+  "expected_ingest_warnings": {"duplicates": n, "missing_price": n, "rejected": n}
+}
+Non-planted habits are listed with planted: false so the evals can check silence.
+
+DATASETS (fixed seeds, written to data/datasets/ with matching JSON in
+data/ground_truth/):
+- clean.csv
+- single_holding_losers.csv, single_revenge_trading.csv, single_overtrading.csv,
+  single_oversizing.csv, single_averaging_down.csv (each: one habit, medium)
+- mixed.csv (holding_losers high, revenge_trading medium, overtrading low)
+- messy.csv (a mixed-like base plus: exact duplicate rows, rows with missing price,
+  status=REJECTED rows, shuffled timestamp order; record counts in
+  expected_ingest_warnings)
+
+CLI: `python -m data.generator --all` regenerates everything; running it twice must
+produce byte-identical files. Add a `make data` target.
+
+TESTS (backend/tests/test_generator.py): determinism (same seed, identical output);
+schema columns; clean.csv satisfies every baseline constraint; each single dataset
+has its planted habit's trade_ids non-empty and all other habits planted:false;
+ground-truth trade_ids all exist in the data; messy.csv counts match the recorded
+expected_ingest_warnings.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 2: Synthetic data
+generator" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `make data` pass, stage only relevant files (including
+the generated datasets, which are small), commit with the message
+"feat(data): synthetic order generator with planted habits", and push to origin
+main. Show me `git status` and `git log --oneline -3` afterwards. Never commit
+.env, API keys, or node_modules. If tests fail, do not commit; fix first.
+
+Result: worked

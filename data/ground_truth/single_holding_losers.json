@@ -1,0 +1,108 @@
+{
+  "dataset": "single_holding_losers",
+  "seed": 102,
+  "habits": {
+    "holding_losers": {
+      "planted": true,
+      "intensity": "medium",
+      "trade_ids": [
+        "T0065",
+        "T0059",
+        "T0060",
+        "T0036",
+        "T0006",
+        "T0029",
+        "T0061",
+        "T0081",
+        "T0058",
+        "T0042",
+        "T0094",
+        "T0015",
+        "T0086",
+        "T0054",
+        "T0039",
+        "T0043",
+        "T0022",
+        "T0023"
+      ],
+      "entry_order_ids": [
+        "ORD00129",
+        "ORD00117",
+        "ORD00119",
+        "ORD00071",
+        "ORD00011",
+        "ORD00057",
+        "ORD00121",
+        "ORD00161",
+        "ORD00115",
+        "ORD00083",
+        "ORD00187",
+        "ORD00029",
+        "ORD00171",
+        "ORD00107",
+        "ORD00077",
+        "ORD00085",
+        "ORD00043",
+        "ORD00045"
+      ],
+      "exit_order_ids": [
+        "ORD00130",
+        "ORD00118",
+        "ORD00120",
+        "ORD00072",
+        "ORD00012",
+        "ORD00058",
+        "ORD00122",
+        "ORD00162",
+        "ORD00116",
+        "ORD00084",
+        "ORD00188",
+        "ORD00030",
+        "ORD00172",
+        "ORD00108",
+        "ORD00078",
+        "ORD00086",
+        "ORD00044",
+        "ORD00046"
+      ],
+      "injected_loss_inr": 51028.8
+    },
+    "revenge_trading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "overtrading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "oversizing": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "averaging_down": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    }
+  },
+  "expected_ingest_warnings": {
+    "duplicates": 0,
+    "missing_price": 0,
+    "rejected": 0
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "dataset": "single_revenge_trading",
+  "seed": 103,
+  "habits": {
+    "holding_losers": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "revenge_trading": {
+      "planted": true,
+      "intensity": "medium",
+      "trade_ids": [
+        "T0051",
+        "T0037",
+        "T0026",
+        "T0006",
+        "T0072",
+        "T0044",
+        "T0022",
+        "T0084",
+        "T0110",
+        "T0017",
+        "T0050",
+        "T0067",
+        "T0103"
+      ],
+      "entry_order_ids": [
+        "ORD00101",
+        "ORD00073",
+        "ORD00051",
+        "ORD00011",
+        "ORD00143",
+        "ORD00087",
+        "ORD00043",
+        "ORD00167",
+        "ORD00219",
+        "ORD00033",
+        "ORD00099",
+        "ORD00133",
+        "ORD00205"
+      ],
+      "exit_order_ids": [
+        "ORD00102",
+        "ORD00074",
+        "ORD00052",
+        "ORD00012",
+        "ORD00144",
+        "ORD00088",
+        "ORD00044",
+        "ORD00168",
+        "ORD00220",
+        "ORD00034",
+        "ORD00100",
+        "ORD00134",
+        "ORD00206"
+      ],
+      "injected_loss_inr": 91213.2
+    },
+    "overtrading": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "oversizing": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    },
+    "averaging_down": {
+      "planted": false,
+      "intensity": null,
+      "trade_ids": [],
+      "entry_order_ids": [],
+      "exit_order_ids": [],
+      "injected_loss_inr": 0.0
+    }
+  },
+  "expected_ingest_warnings": {
+    "duplicates": 0,
+    "missing_price": 0,
+    "rejected": 0
+  }
+}

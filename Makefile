@@ -1,4 +1,4 @@
-.PHONY: run-backend run-frontend build test eval
+.PHONY: run-backend run-frontend build test data eval
 
 VENV := .venv/bin
 
@@ -13,6 +13,9 @@ build:
 
 test:
 	$(VENV)/pytest
+
+data:
+	$(VENV)/python -m data.generator --all
 
 eval:
 	@echo "not implemented"

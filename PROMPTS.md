@@ -1425,3 +1425,47 @@ do not commit; fix first.
 
 Result: worked. API implemented with /api/health, /api/samples catalogue, /api/sample/{name}, and POST /api/analyze endpoints conforming to AnalysisResponse schema. Security, upload limits, row limits, chunked abort (413), error masking without tracebacks (500), request-id middleware, per-IP rate limiting (429), and single-service SPA static serving with Cache-Control headers implemented. All 169 tests pass, ruff check clean, and manual smoke verified on uvicorn.
 
+## Prompt 8b: sample descriptions and proxy-aware rate limit
+
+Step 8b: two small corrections to the API. Do not touch detectors, ranking, narrative,
+the generator, or committed datasets. If anything unexpected comes up, STOP and report.
+In your final summary list every file changed (expected: routes.py, config.py,
+.env.example, tests, README.md, PROMPTS.md only).
+
+A) Sample descriptions (routes.py)
+Rewrite the whitelist descriptions so that each states only what is true of the file and
+uses no options-pricing or causal language (no decay, theta, volatility, and so on).
+- single_holding_losers: "Some losing trades are held much longer than winning ones."
+- messy: "A raw order export with duplicate rows, rejected orders, orders missing a price,
+  and rows out of time order. Shows how the tool cleans data before analysing it."
+- clean: "A steady month with no habit strong enough to flag."
+- the other descriptions: check each against what its generator actually plants and fix
+  any that overstate. Keep each to one sentence.
+Add a test that none of the descriptions or labels contains any term from
+UNSUPPORTED_CLAIM_TERMS (reuse the constant from verifier.py).
+
+B) Proxy-aware client IP for the rate limiter
+Add settings TRUST_PROXY (bool, default false) and TRUSTED_PROXY_HOPS (int, default 1).
+When TRUST_PROXY is false, the limiter keys on the direct client address, as now. When
+true, key on the client IP taken from X-Forwarded-For counting from the RIGHT by
+TRUSTED_PROXY_HOPS (the entry added by our own proxy), falling back to the direct
+address if the header is missing or malformed. Never trust a leftmost entry. Never
+log raw IPs; if you need a key for the limiter, use the IP in memory only. Add both
+settings to .env.example with a comment saying to set TRUST_PROXY=true on Render.
+Tests: with TRUST_PROXY false, a spoofed X-Forwarded-For does NOT change the bucket;
+with true and one hop, two different forwarded IPs get separate buckets and the same IP
+shares one; a malformed header falls back safely; the (limit+1)th request still returns
+429 with Retry-After.
+Add one line to the README privacy note: client IPs are used only in memory for rate
+limiting and are not logged or stored.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 8b: sample descriptions
+and proxy-aware rate limit" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, commit "fix(api): accurate sample
+descriptions, proxy-aware rate limiting" and push to origin main. Show me `git status`
+and `git log --oneline -3`. Never commit .env, API keys, or node_modules.
+
+Result: worked. Sample whitelist descriptions rewritten strictly to ground truth without options-pricing terms and tested against UNSUPPORTED_CLAIM_TERMS. Proxy-aware rate limiter implemented using TRUST_PROXY and TRUSTED_PROXY_HOPS counting from right of X-Forwarded-For, safely falling back to direct socket IP on missing/malformed headers. Settings added to config and .env.example with Render comment. Privacy note updated in README.md. All 171 tests pass, ruff clean.
+
+

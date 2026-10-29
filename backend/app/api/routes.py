@@ -38,62 +38,51 @@ SAMPLE_CATALOGUE: list[dict[str, str]] = [
     {
         "name": "clean",
         "label": "A clean month: no problem habits",
-        "description": (
-            "Disciplined trading with no material behavioral habits "
-            "clearing the detection threshold."
-        ),
+        "description": "A steady month with no habit strong enough to flag.",
     },
     {
         "name": "mixed",
         "label": "Mixed habits: multiple overlapping patterns",
         "description": (
-            "A realistic month exhibiting holding losers, revenge trading, and overtrading."
+            "A month with holding losers, revenge trading, and overtrading present together."
         ),
     },
     {
         "name": "messy",
         "label": "Messy order book: cancelled and rejected orders",
         "description": (
-            "Realistic broker export containing duplicate rows, partial fills, "
-            "cancellations, and rejections."
+            "A raw order export with duplicate rows, rejected orders, orders missing a price, "
+            "and rows out of time order. Shows how the tool cleans data before analysing it."
         ),
     },
     {
         "name": "single_holding_losers",
         "label": "Holding losing trades too long",
-        "description": (
-            "Losing trades held significantly longer than winners, producing "
-            "attributed decay and excess loss."
-        ),
+        "description": "Some losing trades are held much longer than winning ones.",
     },
     {
         "name": "single_revenge_trading",
         "label": "Revenge trading after losses",
         "description": (
-            "Rapid, oversized re-entries following losing trades within minutes of closing."
+            "Several re-entries happen quickly after a loss with increased position size."
         ),
     },
     {
         "name": "single_overtrading",
         "label": "Overtrading on high-activity days",
-        "description": (
-            "Abnormal volume spikes and trade count clusters far exceeding "
-            "typical daily baselines."
-        ),
+        "description": "A few high-volume days have far more trades than usual.",
     },
     {
         "name": "single_oversizing",
         "label": "Oversizing on win/loss streaks",
         "description": (
-            "Position sizes aggressively scaled up after consecutive winning or losing runs."
+            "Position sizes increase significantly after runs of consecutive wins or losses."
         ),
     },
     {
         "name": "single_averaging_down",
         "label": "Averaging down into losing positions",
-        "description": (
-            "Adding contracts to already losing trades hoping to lower entry price."
-        ),
+        "description": "Additional contracts are bought into positions that are already losing.",
     },
 ]
 
@@ -120,15 +109,42 @@ def reset_rate_limiter() -> None:
         _ip_request_history.clear()
 
 
+def get_client_ip(request: Request) -> str:
+    """Extract client IP for in-memory rate limiting.
+
+    When TRUST_PROXY is false, keys on direct socket address.
+    When TRUST_PROXY is true, keys on X-Forwarded-For counting from the right
+    by TRUSTED_PROXY_HOPS, falling back to direct address if missing or malformed.
+    Never trusts a leftmost entry. Never logs raw IPs.
+    """
+    direct_ip = request.client.host if request.client else "127.0.0.1"
+    if not settings.TRUST_PROXY:
+        return direct_ip
+
+    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    if not xff:
+        return direct_ip
+
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    hops = settings.TRUSTED_PROXY_HOPS
+    if len(parts) >= hops and hops > 0:
+        candidate = parts[-hops]
+        if candidate:
+            return candidate
+
+    return direct_ip
+
+
 def check_rate_limit(request: Request) -> Response | None:
     """Check in-memory per-IP rate limit for protected endpoints.
 
     Limitation: per-process, resets on restart.
     """
-    client_ip = request.client.host if request.client else "127.0.0.1"
+    client_ip = get_client_ip(request)
     now = time.time()
     window = 60.0
     limit = settings.RATE_LIMIT_PER_MINUTE
+
 
     with _rate_limit_lock:
         timestamps = _ip_request_history.get(client_ip, [])

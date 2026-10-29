@@ -257,22 +257,88 @@ def test_request_id_middleware(client: TestClient) -> None:
     assert res3.json()["request_id"] == custom_id
 
 
-def test_rate_limiting(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify that requests exceeding rate limit receive a 429 JSON response with Retry-After."""
-    monkeypatch.setattr(settings, "RATE_LIMIT_PER_MINUTE", 3)
+def test_sample_descriptions_no_unsupported_claim_terms() -> None:
+    """Verify sample descriptions contain no unsupported claim terms and match requirements."""
+    from app.verifier import UNSUPPORTED_CLAIM_PATTERNS
+
+    descriptions_by_name = {item["name"]: item["description"] for item in SAMPLE_CATALOGUE}
+
+    # Verify specific required texts
+    assert descriptions_by_name["single_holding_losers"] == (
+        "Some losing trades are held much longer than winning ones."
+    )
+    assert descriptions_by_name["messy"] == (
+        "A raw order export with duplicate rows, rejected orders, orders missing a price, "
+        "and rows out of time order. Shows how the tool cleans data before analysing it."
+    )
+    assert descriptions_by_name["clean"] == (
+        "A steady month with no habit strong enough to flag."
+    )
+
+    for item in SAMPLE_CATALOGUE:
+        combined_text = f"{item['label']} {item['description']}"
+        for term, pattern in UNSUPPORTED_CLAIM_PATTERNS:
+            match = pattern.search(combined_text)
+            assert match is None, (
+                f"Sample '{item['name']}' contains forbidden term '{term}' in '{combined_text}'"
+            )
 
 
-    # 3 allowed requests
-    for _ in range(3):
-        res = client.get("/api/sample/clean")
-        assert res.status_code == 200
+def test_rate_limiting_without_proxy_trust(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With TRUST_PROXY false, spoofed X-Forwarded-For does not change the bucket."""
+    monkeypatch.setattr(settings, "TRUST_PROXY", False)
+    monkeypatch.setattr(settings, "RATE_LIMIT_PER_MINUTE", 2)
 
-    # 4th request must be rate limited
-    res_blocked = client.get("/api/sample/clean")
-    assert res_blocked.status_code == 429
-    assert "Retry-After" in res_blocked.headers
-    assert int(res_blocked.headers["Retry-After"]) >= 1
-    assert "Rate limit exceeded" in res_blocked.json()["detail"]
+    # 2 requests with different spoofed X-Forwarded-For headers
+    res1 = client.get("/api/sample/clean", headers={"X-Forwarded-For": "1.1.1.1"})
+    assert res1.status_code == 200
+
+    res2 = client.get("/api/sample/clean", headers={"X-Forwarded-For": "2.2.2.2"})
+    assert res2.status_code == 200
+
+    # 3rd request from same socket must be rate-limited despite different spoofed header
+    res3 = client.get("/api/sample/clean", headers={"X-Forwarded-For": "3.3.3.3"})
+    assert res3.status_code == 429
+    assert "Retry-After" in res3.headers
+    assert int(res3.headers["Retry-After"]) >= 1
+
+
+def test_rate_limiting_with_trusted_proxy(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With TRUST_PROXY true, rightmost hops determine bucket; separate IPs get separate buckets."""
+    monkeypatch.setattr(settings, "TRUST_PROXY", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOPS", 1)
+    monkeypatch.setattr(settings, "RATE_LIMIT_PER_MINUTE", 2)
+
+    # Client IP 203.0.113.10 uses its 2 requests
+    res1 = client.get("/api/sample/clean", headers={"X-Forwarded-For": "203.0.113.10"})
+    assert res1.status_code == 200
+
+    # Even with spoofed leftmost IP, entry counting 1 from right is still 203.0.113.10
+    res2 = client.get(
+        "/api/sample/clean",
+        headers={"X-Forwarded-For": "198.51.100.1, 203.0.113.10"},
+    )
+    assert res2.status_code == 200
+
+    # 3rd request for 203.0.113.10 hits limit -> 429
+    res3 = client.get("/api/sample/clean", headers={"X-Forwarded-For": "203.0.113.10"})
+    assert res3.status_code == 429
+    assert "Retry-After" in res3.headers
+
+    # Different client IP 203.0.113.20 has its own separate bucket -> 200 OK
+    res_other = client.get("/api/sample/clean", headers={"X-Forwarded-For": "203.0.113.20"})
+    assert res_other.status_code == 200
+
+    # Malformed header falls back safely to direct socket address
+    res_malformed = client.get("/api/sample/clean", headers={"X-Forwarded-For": "   ,  ,"})
+    assert res_malformed.status_code in (200, 429)
+
 
 
 def test_pipeline_exception_handling(

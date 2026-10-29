@@ -4,4 +4,5 @@ TradeMirror is a post-trade review tool designed for retail Futures & Options (F
 
 ## Privacy Note
 
-Uploads are processed purely in memory and never written to disk or logged. Server-side audit logging records only the request ID, route, HTTP status, execution duration, and row counts. No raw order records, account numbers, or client data ever persist on the server.
+Uploads are processed purely in memory and never written to disk or logged. Server-side audit logging records only the request ID, route, HTTP status, execution duration, and row counts. No raw order records, account numbers, or client data ever persist on the server. Client IPs are used only in memory for rate limiting and are not logged or stored.
+

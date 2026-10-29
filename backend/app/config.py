@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 5
     RATE_LIMIT_PER_MINUTE: int = 30
     MAX_ROWS: int = 20000
+    TRUST_PROXY: bool = False
+    TRUSTED_PROXY_HOPS: int = 1
     SAMPLES_DIR: Path = _REPO_ROOT / "data" / "datasets"
+
     FRONTEND_DIST: Path = _REPO_ROOT / "frontend" / "dist"
 
 

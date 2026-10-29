@@ -2291,3 +2291,703 @@ def test_oversizing_multi_seed_robustness() -> None:
     detection_rate = planted_fired / 30.0
     print(f"Multi-seed planted months detected: {planted_fired}/30 ({detection_rate:.1%})")
     assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"
+
+
+# =====================================================================
+# SECTION 5: AveragingDownDetector Tests (Step 5e)
+# =====================================================================
+
+
+def _make_ad_trade(
+    trade_id: str,
+    entry_time: datetime,
+    exit_time: datetime,
+    entry_price: float,
+    exit_price: float,
+    quantity: int,
+    lot_size: int,
+    entry_order_id: str,
+    exit_order_id: str,
+    direction: str = "LONG",
+    symbol: str = "NIFTY24OCT25000CE",
+    is_add_on: bool = False,
+    is_partial_exit: bool = False,
+) -> Trade:
+    """Helper for building Trade instances for averaging down tests."""
+    gross_pnl = (
+        (exit_price - entry_price) * quantity
+        if direction == "LONG"
+        else (entry_price - exit_price) * quantity
+    )
+    return Trade(
+        trade_id=trade_id,
+        symbol=symbol,
+        instrument_type="CE" if "CE" in symbol else "PE",
+        strike=25000.0,
+        expiry=date(2024, 10, 31),
+        direction=direction,
+        entry_time=entry_time,
+        exit_time=exit_time,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        quantity=quantity,
+        lot_size=lot_size,
+        hold_minutes=(exit_time - entry_time).total_seconds() / 60.0,
+        gross_pnl=round(gross_pnl, 2),
+        entry_order_id=entry_order_id,
+        exit_order_id=exit_order_id,
+        is_partial_exit=is_partial_exit,
+        is_add_on=is_add_on,
+        trading_date=entry_time.date(),
+    )
+
+
+def test_averaging_down_fires_on_constructed_case() -> None:
+    """Averaging down fires on a constructed case with hand-computed expectations."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    trades = []
+    base_dates = [date(2024, 10, 1), date(2024, 10, 2), date(2024, 10, 3)]
+    base_entries = [100.0, 120.0, 150.0]
+    addon_entries = [80.0, 100.0, 120.0]
+    exit_prices = [70.0, 90.0, 110.0]
+
+    for i in range(3):
+        d = base_dates[i]
+        t0 = datetime(d.year, d.month, d.day, 9, 30, tzinfo=IST)
+        t_add = t0 + timedelta(minutes=15)
+        t_exit = t0 + timedelta(minutes=45)
+
+        trades.append(
+            _make_ad_trade(
+                trade_id=f"BASE_{i}",
+                entry_time=t0,
+                exit_time=t_exit,
+                entry_price=base_entries[i],
+                exit_price=exit_prices[i],
+                quantity=75,
+                lot_size=75,
+                entry_order_id=f"E_BASE_{i}",
+                exit_order_id=f"X_BASE_{i}",
+                is_add_on=False,
+            )
+        )
+        trades.append(
+            _make_ad_trade(
+                trade_id=f"ADDON_{i}",
+                entry_time=t_add,
+                exit_time=t_exit,
+                entry_price=addon_entries[i],
+                exit_price=exit_prices[i],
+                quantity=75,
+                lot_size=75,
+                entry_order_id=f"E_ADD_{i}",
+                exit_order_id=f"X_ADD_{i}",
+                is_add_on=True,
+            )
+        )
+
+    det = AveragingDownDetector()
+    res = det.detect(trades)
+
+    assert res is not None, "Expected averaging_down detector to fire"
+    assert res.key == "averaging_down"
+    assert res.name == "Adding to a losing position"
+    assert res.flagged_trade_ids == ["ADDON_0", "ADDON_1", "ADDON_2"]
+    assert abs(res.estimated_cost_inr - 2250.0) < 0.01
+
+    assert res.metrics["n_entries"] == 6
+    assert res.metrics["add_on_entries"] == 3
+    assert res.metrics["flagged_entries"] == 3
+    assert res.metrics["flagged_net_pnl_inr"] == -2250.0
+    assert res.metrics["add_on_win_rate"] == 0.0
+    assert abs(res.confidence - 0.5) < 0.01
+
+
+def test_averaging_down_equal_price_not_flagged_just_below_is() -> None:
+    """Add-on price equal to existing average entry is NOT flagged; strictly below is."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t_add1 = t0 + timedelta(minutes=10)
+    t_add2 = t0 + timedelta(minutes=20)
+    t_exit = t0 + timedelta(minutes=45)
+
+    base = _make_ad_trade(
+        "B1", t0, t_exit, 100.0, 80.0, 75, 75, "EB1", "XB1", is_add_on=False
+    )
+    add_equal = _make_ad_trade(
+        "ADD_EQ", t_add1, t_exit, 100.0, 80.0, 75, 75, "E_EQ", "X_EQ", is_add_on=True
+    )
+    add_below = _make_ad_trade(
+        "ADD_BELOW", t_add2, t_exit, 99.9, 80.0, 75, 75, "E_BELOW", "X_BELOW", is_add_on=True
+    )
+
+    d2 = datetime(2024, 10, 2, 9, 30, tzinfo=IST)
+    b2 = _make_ad_trade("B2", d2, d2 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB2", "XB2")
+    a2 = _make_ad_trade(
+        "A2",
+        d2 + timedelta(minutes=15),
+        d2 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA2",
+        "XA2",
+        is_add_on=True,
+    )
+
+    d3 = datetime(2024, 10, 3, 9, 30, tzinfo=IST)
+    b3 = _make_ad_trade("B3", d3, d3 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB3", "XB3")
+    a3 = _make_ad_trade(
+        "A3",
+        d3 + timedelta(minutes=15),
+        d3 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA3",
+        "XA3",
+        is_add_on=True,
+    )
+
+    trades = [base, add_equal, add_below, b2, a2, b3, a3]
+    det = AveragingDownDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "ADD_EQ" not in res.flagged_trade_ids, "Equal price add-on must not be flagged"
+    assert "ADD_BELOW" in res.flagged_trade_ids, "Just-below price add-on must be flagged"
+
+
+def test_averaging_down_pyramiding_not_flagged() -> None:
+    """Adding to a winning position (price higher than average entry for LONG) is not flagged."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t_add = t0 + timedelta(minutes=15)
+    t_exit = t0 + timedelta(minutes=45)
+
+    base = _make_ad_trade("B1", t0, t_exit, 100.0, 130.0, 75, 75, "EB1", "XB1", is_add_on=False)
+    add_pyr = _make_ad_trade(
+        "ADD_PYR", t_add, t_exit, 120.0, 130.0, 75, 75, "EPYR", "XPYR", is_add_on=True
+    )
+
+    det = AveragingDownDetector()
+    res = det.detect([base, add_pyr])
+    assert res is None, "Pyramiding into winners must not be flagged"
+
+
+def test_averaging_down_weighted_average_two_lots() -> None:
+    """With two existing open lots at different prices, quantity-weighted average is used."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t1 = t0 + timedelta(minutes=5)
+    t_add = t0 + timedelta(minutes=15)
+    t_exit = t0 + timedelta(minutes=45)
+
+    lot1 = _make_ad_trade("L1", t0, t_exit, 100.0, 90.0, 75, 75, "EL1", "XL1", is_add_on=False)
+    lot2 = _make_ad_trade("L2", t1, t_exit, 120.0, 90.0, 225, 75, "EL2", "XL2", is_add_on=False)
+
+    addon = _make_ad_trade(
+        "ADD_WEIGHTED", t_add, t_exit, 112.0, 90.0, 75, 75, "EW", "XW", is_add_on=True
+    )
+
+    d2 = datetime(2024, 10, 2, 9, 30, tzinfo=IST)
+    b2 = _make_ad_trade("B2", d2, d2 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB2", "XB2")
+    a2 = _make_ad_trade(
+        "A2",
+        d2 + timedelta(minutes=15),
+        d2 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA2",
+        "XA2",
+        is_add_on=True,
+    )
+
+    d3 = datetime(2024, 10, 3, 9, 30, tzinfo=IST)
+    b3 = _make_ad_trade("B3", d3, d3 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB3", "XB3")
+    a3 = _make_ad_trade(
+        "A3",
+        d3 + timedelta(minutes=15),
+        d3 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA3",
+        "XA3",
+        is_add_on=True,
+    )
+
+    trades = [lot1, lot2, addon, b2, a2, b3, a3]
+    det = AveragingDownDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "ADD_WEIGHTED" in res.flagged_trade_ids, (
+        "Add-on at 112.0 must be flagged under weighted average 115.0"
+    )
+
+
+def test_averaging_down_partial_exit_before_addon() -> None:
+    """A partial exit before the add-on removes that quantity from the existing position."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t_exit1 = t0 + timedelta(minutes=10)
+    t_add = t0 + timedelta(minutes=15)
+    t_exit2 = t0 + timedelta(minutes=45)
+
+    lot1 = _make_ad_trade("L1", t0, t_exit1, 100.0, 105.0, 75, 75, "EL1", "XL1", is_add_on=False)
+    lot2 = _make_ad_trade("L2", t0, t_exit2, 120.0, 90.0, 75, 75, "EL2", "XL2", is_add_on=False)
+
+    addon = _make_ad_trade(
+        "ADD_PARTIAL", t_add, t_exit2, 115.0, 90.0, 75, 75, "EPARTIAL", "XPARTIAL", is_add_on=True
+    )
+
+    d2 = datetime(2024, 10, 2, 9, 30, tzinfo=IST)
+    b2 = _make_ad_trade("B2", d2, d2 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB2", "XB2")
+    a2 = _make_ad_trade(
+        "A2",
+        d2 + timedelta(minutes=15),
+        d2 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA2",
+        "XA2",
+        is_add_on=True,
+    )
+
+    d3 = datetime(2024, 10, 3, 9, 30, tzinfo=IST)
+    b3 = _make_ad_trade("B3", d3, d3 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB3", "XB3")
+    a3 = _make_ad_trade(
+        "A3",
+        d3 + timedelta(minutes=15),
+        d3 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA3",
+        "XA3",
+        is_add_on=True,
+    )
+
+    trades = [lot1, lot2, addon, b2, a2, b3, a3]
+    det = AveragingDownDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "ADD_PARTIAL" in res.flagged_trade_ids, (
+        "Lot 1 should not be in existing position because it exited before add-on entry_time"
+    )
+
+
+def test_averaging_down_short_direction_mirrors_long() -> None:
+    """Short direction: add-on entry_price > existing average entry is underwater."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t_add = t0 + timedelta(minutes=15)
+    t_exit = t0 + timedelta(minutes=45)
+
+    base = _make_ad_trade(
+        "SB1", t0, t_exit, 100.0, 130.0, 75, 75, "ESB1", "XSB1", direction="SHORT"
+    )
+    add_underwater = _make_ad_trade(
+        "SADD_UW",
+        t_add,
+        t_exit,
+        120.0,
+        130.0,
+        75,
+        75,
+        "ESADD",
+        "XSADD",
+        direction="SHORT",
+        is_add_on=True,
+    )
+
+    d2 = datetime(2024, 10, 2, 9, 30, tzinfo=IST)
+    sb2 = _make_ad_trade(
+        "SB2", d2, d2 + timedelta(minutes=45), 100.0, 130.0, 75, 75,
+        "ESB2", "XSB2", direction="SHORT"
+    )
+    sa2 = _make_ad_trade(
+        "SA2", d2 + timedelta(minutes=15), d2 + timedelta(minutes=45), 120.0, 130.0, 75, 75,
+        "ESA2", "XSA2", direction="SHORT", is_add_on=True
+    )
+
+    d3 = datetime(2024, 10, 3, 9, 30, tzinfo=IST)
+    sb3 = _make_ad_trade(
+        "SB3", d3, d3 + timedelta(minutes=45), 100.0, 130.0, 75, 75,
+        "ESB3", "XSB3", direction="SHORT"
+    )
+    sa3 = _make_ad_trade(
+        "SA3", d3 + timedelta(minutes=15), d3 + timedelta(minutes=45), 120.0, 130.0, 75, 75,
+        "ESA3", "XSA3", direction="SHORT", is_add_on=True
+    )
+
+    trades = [base, add_underwater, sb2, sa2, sb3, sa3]
+    det = AveragingDownDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "SADD_UW" in res.flagged_trade_ids, "Short add-on at higher price must be flagged"
+
+
+def test_averaging_down_no_qualifying_position_not_evaluated() -> None:
+    """An add-on trade with no qualifying existing position is skipped."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t_exit = t0 + timedelta(minutes=30)
+
+    orphan_addon = _make_ad_trade(
+        "ORPHAN", t0, t_exit, 100.0, 80.0, 75, 75, "EORPHAN", "XORPHAN", is_add_on=True
+    )
+
+    det = AveragingDownDetector()
+    res = det.detect([orphan_addon])
+    assert res is None, "Orphan add-on with no existing position must return None"
+
+
+def test_averaging_down_multi_slice_addon_aggregated() -> None:
+    """Multi-slice add-on (partial exit of the add-on order) is aggregated as one event."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t_add = t0 + timedelta(minutes=15)
+    t_ex1 = t0 + timedelta(minutes=30)
+    t_ex2 = t0 + timedelta(minutes=45)
+
+    base = _make_ad_trade("B1", t0, t_ex2, 100.0, 80.0, 75, 75, "EB1", "XB1", is_add_on=False)
+    slice1 = _make_ad_trade(
+        "ADD_S1",
+        t_add,
+        t_ex1,
+        80.0,
+        70.0,
+        75,
+        75,
+        "E_MULTI",
+        "X_S1",
+        is_add_on=True,
+        is_partial_exit=True,
+    )
+    slice2 = _make_ad_trade(
+        "ADD_S2",
+        t_add,
+        t_ex2,
+        80.0,
+        70.0,
+        75,
+        75,
+        "E_MULTI",
+        "X_S2",
+        is_add_on=True,
+        is_partial_exit=True,
+    )
+
+    d2 = datetime(2024, 10, 2, 9, 30, tzinfo=IST)
+    b2 = _make_ad_trade("B2", d2, d2 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB2", "XB2")
+    a2 = _make_ad_trade(
+        "A2",
+        d2 + timedelta(minutes=15),
+        d2 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA2",
+        "XA2",
+        is_add_on=True,
+    )
+
+    d3 = datetime(2024, 10, 3, 9, 30, tzinfo=IST)
+    b3 = _make_ad_trade("B3", d3, d3 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB3", "XB3")
+    a3 = _make_ad_trade(
+        "A3",
+        d3 + timedelta(minutes=15),
+        d3 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA3",
+        "XA3",
+        is_add_on=True,
+    )
+
+    trades = [base, slice1, slice2, b2, a2, b3, a3]
+    det = AveragingDownDetector()
+    res = det.detect(trades)
+
+    assert res is not None
+    assert "ADD_S1" in res.flagged_trade_ids
+    assert "ADD_S2" in res.flagged_trade_ids
+    assert res.metrics["flagged_entries"] == 3
+
+
+def test_averaging_down_non_addon_entries_ignored() -> None:
+    """Non-add-on entries (is_add_on=False) are ignored even if entered at worsening prices."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    t0 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    t1 = t0 + timedelta(minutes=60)
+    t2 = t0 + timedelta(minutes=120)
+
+    t_a = _make_ad_trade(
+        "T1", t0, t0 + timedelta(minutes=20), 100.0, 80.0, 75, 75, "E1", "X1", is_add_on=False
+    )
+    t_b = _make_ad_trade(
+        "T2", t1, t1 + timedelta(minutes=20), 80.0, 60.0, 75, 75, "E2", "X2", is_add_on=False
+    )
+    t_c = _make_ad_trade(
+        "T3", t2, t2 + timedelta(minutes=20), 60.0, 40.0, 75, 75, "E3", "X3", is_add_on=False
+    )
+
+    det = AveragingDownDetector()
+    assert det.detect([t_a, t_b, t_c]) is None
+
+
+def test_averaging_down_guards_and_positive_net_returns_none() -> None:
+    """Fewer than 3 flagged entries or net positive gross PnL on add-ons returns None."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    d1 = datetime(2024, 10, 1, 9, 30, tzinfo=IST)
+    b1 = _make_ad_trade("B1", d1, d1 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB1", "XB1")
+    a1 = _make_ad_trade(
+        "A1",
+        d1 + timedelta(minutes=15),
+        d1 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA1",
+        "XA1",
+        is_add_on=True,
+    )
+
+    d2 = datetime(2024, 10, 2, 9, 30, tzinfo=IST)
+    b2 = _make_ad_trade("B2", d2, d2 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB2", "XB2")
+    a2 = _make_ad_trade(
+        "A2",
+        d2 + timedelta(minutes=15),
+        d2 + timedelta(minutes=45),
+        80.0,
+        70.0,
+        75,
+        75,
+        "EA2",
+        "XA2",
+        is_add_on=True,
+    )
+
+    det = AveragingDownDetector()
+    assert det.detect([b1, a1, b2, a2]) is None, "Fewer than 3 flagged must return None"
+
+    d3 = datetime(2024, 10, 3, 9, 30, tzinfo=IST)
+    b3 = _make_ad_trade("B3", d3, d3 + timedelta(minutes=45), 100.0, 80.0, 75, 75, "EB3", "XB3")
+    a1_win = _make_ad_trade(
+        "A1W",
+        d1 + timedelta(minutes=15),
+        d1 + timedelta(minutes=45),
+        80.0,
+        150.0,
+        75,
+        75,
+        "EA1W",
+        "XA1W",
+        is_add_on=True,
+    )
+    a2_win = _make_ad_trade(
+        "A2W",
+        d2 + timedelta(minutes=15),
+        d2 + timedelta(minutes=45),
+        80.0,
+        150.0,
+        75,
+        75,
+        "EA2W",
+        "XA2W",
+        is_add_on=True,
+    )
+    a3_win = _make_ad_trade(
+        "A3W",
+        d3 + timedelta(minutes=15),
+        d3 + timedelta(minutes=45),
+        80.0,
+        150.0,
+        75,
+        75,
+        "EA3W",
+        "XA3W",
+        is_add_on=True,
+    )
+
+    assert det.detect([b1, a1_win, b2, a2_win, b3, a3_win]) is None, (
+        "Net positive add-on PnL must return None"
+    )
+
+
+def test_averaging_down_determinism() -> None:
+    """Repeated calls to detect return identical results."""
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    trades = []
+    for i in range(3):
+        d = datetime(2024, 10, 1 + i, 9, 30, tzinfo=IST)
+        trades.append(
+            _make_ad_trade(
+                f"B{i}", d, d + timedelta(minutes=45), 100.0, 80.0, 75, 75, f"EB{i}", f"XB{i}"
+            )
+        )
+        trades.append(
+            _make_ad_trade(
+                f"A{i}",
+                d + timedelta(minutes=15),
+                d + timedelta(minutes=45),
+                80.0,
+                70.0,
+                75,
+                75,
+                f"EA{i}",
+                f"XA{i}",
+                is_add_on=True,
+            )
+        )
+
+    det = AveragingDownDetector()
+    r1 = det.detect(trades)
+    r2 = det.detect(trades)
+
+    assert r1 is not None and r2 is not None
+    assert r1.flagged_trade_ids == r2.flagged_trade_ids
+    assert r1.estimated_cost_inr == r2.estimated_cost_inr
+    assert r1.confidence == r2.confidence
+    assert r1.metrics == r2.metrics
+    assert r1.formula_note == r2.formula_note
+
+
+def test_averaging_down_benchmark_datasets() -> None:
+    """Test AveragingDownDetector on benchmark datasets."""
+    from pathlib import Path
+
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    det = AveragingDownDetector()
+
+    # 1. clean.csv: must return None
+    clean_trades = pair_orders(parse_orders(Path("data/datasets/clean.csv")).orders).trades
+    assert det.detect(clean_trades) is None, "averaging_down falsely fired on clean.csv"
+
+    # 2. single_averaging_down.csv: fires with precision >= 0.8 and recall >= 0.6
+    ad_trades = pair_orders(
+        parse_orders(Path("data/datasets/single_averaging_down.csv")).orders
+    ).trades
+    with open("data/ground_truth/single_averaging_down.json") as f:
+        gt_ad = json.load(f)["habits"]["averaging_down"]
+
+    res = det.detect(ad_trades)
+    assert res is not None, "averaging_down failed to fire on single_averaging_down.csv"
+
+    true_eoids = set(gt_ad["entry_order_ids"])
+    detected_eoids = set(
+        t.entry_order_id for t in ad_trades if t.trade_id in res.flagged_trade_ids
+    )
+
+    tp = len(detected_eoids & true_eoids)
+    precision = tp / len(detected_eoids) if detected_eoids else 0.0
+    recall = tp / len(true_eoids) if true_eoids else 0.0
+    injected_loss = gt_ad["injected_loss_inr"]
+
+    print("\n--- single_averaging_down.csv Evaluation ---")
+    print(f"Precision:       {precision:.3f}")
+    print(f"Recall:          {recall:.3f}")
+    print(f"Estimated Cost:  Rs {res.estimated_cost_inr:,.2f}")
+    print(f"Injected Loss:   Rs {injected_loss:,.2f}")
+    print(
+        "injected_loss_inr for averaging_down = the extra loss on the add-on order leg itself: "
+        "(addon_price - exit_price) * addon_qty, recording max(0, addon_loss). "
+        "The generator selects trades that are already losing and plants add-ons "
+        "at 75-90% of entry, which typically end up losing because the base "
+        "trade finishes at a loss."
+    )
+    print(f"Metrics: {res.metrics}")
+
+    assert precision >= 0.8, f"Precision {precision:.3f} < 0.8"
+    assert recall >= 0.6, f"Recall {recall:.3f} < 0.6"
+    assert (
+        0.5 * injected_loss <= res.estimated_cost_inr <= 2.0 * injected_loss
+    ), f"Cost Rs{res.estimated_cost_inr} out of [0.5x, 2x] injected Rs{injected_loss}"
+
+    # 3. Other datasets: print whether each fires
+    print("\n--- Other datasets ---")
+    for ds_name in [
+        "single_holding_losers",
+        "single_revenge_trading",
+        "single_overtrading",
+        "single_oversizing",
+        "mixed",
+    ]:
+        ds_path = Path(f"data/datasets/{ds_name}.csv")
+        ds_trades = pair_orders(parse_orders(ds_path).orders).trades
+        ds_res = det.detect(ds_trades)
+        with open(f"data/ground_truth/{ds_name}.json") as f:
+            ds_gt = json.load(f)
+        planted = ds_gt["habits"]["averaging_down"]["planted"]
+        if ds_res is not None and not planted:
+            flagged_eoids = {
+                t.entry_order_id for t in ds_trades if t.trade_id in ds_res.flagged_trade_ids
+            }
+            print(f"{ds_name}: FIRES (unplanted!) flagged_eoids={sorted(flagged_eoids)}")
+        else:
+            status = f"FIRES (Rs{ds_res.estimated_cost_inr:,.2f})" if ds_res else "None"
+            print(f"{ds_name}: {status}")
+
+
+def test_averaging_down_multi_seed_robustness() -> None:
+    """Multi-seed robustness check in memory.
+
+    30 clean months seeds 980-1009 -> at most 1 fires.
+    30 planted months seeds 1010-1039 -> detection >= 0.8.
+    """
+    from app.detectors.averaging_down import AveragingDownDetector
+
+    det = AveragingDownDetector()
+
+    # 30 clean months: at most 1 fires
+    clean_fired = 0
+    for s in range(980, 1010):
+        csv_txt, _ = generate_dataset_in_memory(seed=s)
+        trades = pair_orders(parse_orders(csv_txt).orders).trades
+        if det.detect(trades) is not None:
+            clean_fired += 1
+
+    print(f"\nMulti-seed clean months fired: {clean_fired}/30 ({clean_fired / 30:.1%})")
+    assert clean_fired <= 1, f"Clean months fired {clean_fired}/30 times (> 1)"
+
+    # 30 planted months: detection >= 0.8
+    planted_fired = 0
+    for s in range(1010, 1040):
+        csv_txt, _ = generate_dataset_in_memory(
+            seed=s, habits_config={"averaging_down": "medium"}
+        )
+        trades = pair_orders(parse_orders(csv_txt).orders).trades
+        if det.detect(trades) is not None:
+            planted_fired += 1
+
+    detection_rate = planted_fired / 30.0
+    print(f"Multi-seed planted months detected: {planted_fired}/30 ({detection_rate:.1%})")
+    assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"

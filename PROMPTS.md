@@ -755,3 +755,88 @@ with the message "feat(detectors): oversizing", and push to origin main. Show me
 node_modules. If tests fail, do not commit; fix first.
 
 Result: worked. Oversizing detector implemented in backend/app/detectors/oversizing.py with fixed thresholds (MIN_ENTRIES=20, SIZE_MULTIPLE=2.0, STREAK_LEN=2, MIN_FLAGGED=3). Single_oversizing.csv: precision=1.000, recall=0.950, cost=₹130,727.40 vs injected=₹135,033.90 (ratio 0.968, within [0.5, 2.0]). Clean.csv and all non-planted single_* datasets and mixed.csv: None (0 false positives). Multi-seed: clean 0/30 fires, planted 30/30 detected (100%). make data byte-identical. 89 tests pass, ruff clean.
+## Prompt 5e: averaging_down detector
+
+Step 5e: implement ONLY the averaging_down detector in
+backend/app/detectors/averaging_down.py. Append a new section to
+backend/tests/test_detectors.py; do not touch earlier sections.
+
+RULES: thresholds below are fixed. Do NOT modify data/generator.py in this step. If a
+test or multi-seed run fails, STOP and report numbers and diagnosis (detector logic,
+threshold design, or generator) and let me decide. In your final summary state
+explicitly whether any threshold, existing test, generator file, or committed dataset
+changed (expected: none).
+
+DEFINITION
+Habit: the trader adds to a position that is already losing, hoping to average the
+price down. Detector: class AveragingDownDetector(BaseDetector), key
+"averaging_down", returning HabitResult | None. Gross P&L only (state in docstring).
+
+DEFINITIONS USED BY THE FORMULA (document in the docstring)
+- Add-on entry event: all Trade slices sharing the same entry_order_id where
+  is_add_on = true, treated as ONE event (qty, pnl = sums; entry_price is the same
+  across slices).
+- Existing position at the add-on's entry_time: all other slices with the same
+  position key (symbol, instrument_type, strike, expiry) and the same direction, with
+  entry_time before the add-on's entry_time (ties broken by entry_order_id) AND
+  exit_time strictly after the add-on's entry_time. Its average entry =
+  quantity-weighted mean of those slices' entry_price. If no such slices exist, the
+  add-on is not evaluated.
+- UNDERWATER add-on: for LONG, add-on entry_price < existing average entry (strictly);
+  for SHORT, add-on entry_price > existing average entry (strictly). Equal price or
+  adding to a winner (pyramiding) is NOT flagged.
+
+FORMULA (named module constants)
+1. An add-on entry is FLAGGED when it is underwater as defined above.
+2. Require len(flagged) >= MIN_FLAGGED (3), else return None.
+3. flagged_trade_ids = Trade.trade_id of every slice of a flagged add-on entry, sorted.
+4. estimated_cost_inr = max(0, -(sum of gross_pnl over those slices)). Net loss on the
+   add-on legs, so winning add-ons offset losing ones. If 0, return None.
+5. confidence = min(1, flagged_entries / 6), rounded to 2.
+6. metrics = {n_entries (all entry events, add-ons included), add_on_entries (all
+   add-ons), flagged_entries, avg_drop_pct (mean of (avg_entry - add_price) /
+   avg_entry for longs, mirrored for shorts, as a percent), flagged_net_pnl_inr,
+   add_on_win_rate (share of flagged add-ons that were profitable)}.
+7. name "Adding to a losing position"; formula_note = one plain paragraph a trader can
+   read with the actual numbers filled in.
+
+TESTS
+Hand-built Trade lists with hand-computed expectations:
+- fires on a constructed case: exact cost, ids, metrics
+- add-on price equal to the average is NOT flagged; just below is
+- add-on above the average (adding to a winner) is NOT flagged
+- two existing lots: the weighted average is used, not a simple mean
+- a partial exit before the add-on removes that quantity from the existing position
+  (use exit_time strictly after entry_time)
+- short direction mirrors the long logic
+- add-on with no qualifying existing position is not evaluated
+- multi-slice add-on aggregated as one event
+- non-add-on entries are ignored
+- fewer than 3 flagged -> None; net positive -> None
+- determinism
+
+DATASET TESTS (parse_orders -> pair_orders -> detect):
+- clean.csv: None
+- single_averaging_down.csv: fires. Map flagged entries to the ground-truth
+  entry_order_ids (the add-on entry orders): assert precision >= 0.8 and recall >=
+  0.6; assert cost within 0.5x to 2.0x of injected_loss_inr. Print precision, recall,
+  cost, injected_loss_inr, and tell me exactly what injected_loss_inr measures for
+  this habit and whether the generator forces the add-on legs to lose.
+- mixed.csv and the other single_* datasets: do not assert. Print whether it fires on
+  each, and list any flagged entries on datasets where it is not planted, with a
+  one-line reason.
+
+MULTI-SEED (in memory, via generate_dataset_in_memory): 30 clean months seeds
+980-1009 -> assert at most 1 fires; 30 months with averaging_down planted at medium
+seeds 1010-1039 -> assert detection >= 0.8. Print both. Confirm `make data`
+reproduces byte-identical committed files.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 5e: averaging_down
+detector" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit with
+the message "feat(detectors): averaging_down", and push to origin main. Show me
+`git status` and `git log --oneline -3` afterwards. Never commit .env, API keys, or
+node_modules. If tests fail, do not commit; fix first.
+
+Result: worked. AveragingDownDetector implemented in backend/app/detectors/averaging_down.py with fixed thresholds (MIN_FLAGGED=3, CONFIDENCE_DIVISOR=6). Single_averaging_down.csv: precision=1.000, recall=1.000, cost=₹6,879.95 vs injected=₹8,373.05 (ratio 0.822, within [0.5, 2.0]). Clean.csv, mixed.csv, and all other single_* datasets return None (0 false positives). Multi-seed: clean 0/30 fires, planted 30/30 detected (100%). make data byte-identical. 102 tests pass, ruff clean.

@@ -1075,3 +1075,148 @@ mixed.csv. All three planted habits should be kept. Expect holding_losers first,
 The confidence table. A planted habit that’s still dropped means we’ve got a second problem, and Antigravity should stop again.
 
 Result: worked. Holding_losers confidence updated to use flagged loser hold ratio, leaving detection logic, thresholds, flagged IDs, and costs 100% byte-for-byte identical while lifting confidence on planted datasets (single_holding_losers: 1.00, mixed: 0.83, messy: 1.00). All single_* datasets isolate their planted habit at Rank 1. Mixed.csv retains holding_losers (Rank 1, ₹97,841.20), revenge_trading (Rank 2, ₹28,103.25 attributed with 41.67% overlap), and overtrading (Rank 3, ₹22,629.00). Clean.csv material=False. 122 tests pass, ruff clean.
+
+## Prompt 7: narrative layer and verifier
+
+Step 7: implement the narrative layer and the verifier. This is one step because the
+verifier is what makes the narrative safe to show.
+
+TREE ADDITION: exactly one new module, backend/app/narrative.py (the orchestrator).
+Everything else goes in files that already exist: app/llm/client.py, app/llm/
+templates.py, app/verifier.py, prompts/narrative_system.md, app/config.py,
+.env.example, and tests in backend/tests/test_verifier.py and
+backend/tests/test_llm.py (replace the skipped placeholders).
+
+RULES: do not touch detectors, ranking thresholds, the generator, or committed
+datasets. Tests must never make real network calls: add an autouse fixture in
+conftest.py that makes any real httpx request raise, and mock the transport in the
+LLM tests. If anything unexpected comes up, STOP and report instead of working around
+it. In your final summary list every file changed outside the files named above
+(expected: none).
+
+PRINCIPLE: all numbers come from deterministic code. The LLM only explains numbers it
+is given. It never sees raw orders, only the facts bundle below.
+
+1) FACTS BUNDLE (narrative.py): build_facts(ranked: RankedResult, trades: list[Trade])
+-> Facts. Deterministic and JSON-serialisable. Contains:
+- context: n_trades, gross_pnl_inr, gross_loss_inr, win_rate, total_attributed_cost_inr
+- per kept habit (same order as ranked.habits): key, name, attributed_cost_inr,
+  estimated_cost_inr, overlap_share, confidence, metrics, formula_note,
+  approved_rule (a fixed rule string per habit from templates.py; see 2), and up to 3
+  example trades chosen deterministically (largest loss first, ties by trade_id), each
+  with trade_id, trading_date, symbol, instrument_type, strike, direction,
+  hold_minutes, quantity, gross_pnl
+- allowed_numbers: every number appearing anywhere in the bundle, plus every number in
+  each approved_rule
+- allowed_trade_ids: the flagged trade ids of the kept habits
+- allowed_dates: every ISO date appearing in the bundle
+Only kept habits appear. Raw orders, order ids, and file contents are never included.
+
+2) TEMPLATES (templates.py): per habit key, a deterministic fallback:
+{explanation (2 sentences max, numbers filled in from metrics and attributed cost),
+rule (one concrete behavioural rule; fixed text per habit; any numbers in it are its
+own fixed constants, for example "wait 30 minutes after a loss before the next entry")}.
+Plus a deterministic summary sentence and a deterministic "nothing material" message.
+Templates describe behaviour only. No advice on what to buy or sell, no predictions.
+
+3) VERIFIER (verifier.py): verify_narrative(narrative, facts) -> VerificationReport with
+passed (bool), checked_numbers, checked_trade_ids, and failures (list of {field, kind,
+value, message}). Checks:
+a) Numbers. Tokenise all text in the narrative. First remove trade ids (pattern
+   P\d{4}) and ISO dates, and check those against allowed_trade_ids and allowed_dates
+   separately. Then extract every remaining numeric token. Handle: rupee amounts with
+   a rupee sign, Indian grouping (1,48,573) and western grouping (148,573), decimals,
+   percentages, multiples like 2.1x, and the words/suffixes "lakh" and "k" (convert to
+   numbers). A number passes if some allowed number matches within max(1, 1% of the
+   allowed value). Percentages may match an allowed share expressed as a fraction
+   (0.4167 vs 41.7%) within 0.5 percentage points. A number that matches nothing is a
+   failure, EXCEPT ordinals and the counts 1 to 3 used as small quantifiers only if
+   they also appear in allowed_numbers; otherwise they are checked like everything
+   else. Document the limitation that numbers written as words are not checked and
+   instruct the LLM (prompt file) to always use digits.
+b) Trade ids and dates: every id and date mentioned must be in the allowed sets.
+c) Structure: the narrative's habit keys must equal exactly the kept habit keys, in the
+   same order; no extra or missing habits.
+d) Forbidden content: case-insensitive blocklist for recommendations and predictions,
+   for example buy/sell/hold instructions, "will rise/fall/go up/go down", "guaranteed",
+   "you should trade", "price target". Keep the blocklist as a named constant and test
+   it.
+e) The rule field of each habit may contain numbers only from allowed_numbers (which
+   includes that habit's approved_rule numbers).
+Return ALL failures, not just the first.
+
+4) LLM CLIENT (client.py): a single function call_llm(system, user, settings) -> str
+using httpx with a timeout, provider chosen by settings.LLM_PROVIDER ("gemini",
+"anthropic", or "none"), model from LLM_MODEL, key from LLM_API_KEY. Do not hard-code
+or guess model names; they come from the environment. Read the provider's current REST
+documentation in your tools if needed. No key or provider "none" means: never make an
+HTTP call. Add LLM_PROVIDER (default "none") and LLM_TIMEOUT_SECONDS (default 20) to
+config.py and .env.example. Never log the key or the full prompt.
+
+5) ORCHESTRATOR (narrative.py): generate_narrative(ranked, trades, settings) ->
+NarrativeResult {narrative, source ("llm" | "template"), fallback_reason (None or short
+text), verification (VerificationReport), llm_attempts (int)}.
+Flow:
+- not ranked.material -> deterministic "nothing material" narrative, source "template",
+  no LLM call.
+- no key or provider none -> template narrative, source "template", reason "no_llm_key".
+- otherwise attempt 1: call the LLM with the system prompt and the facts as JSON ->
+  parse JSON (strip code fences) -> pydantic schema validation -> verify_narrative. If
+  it passes, source "llm".
+- if parsing, schema, or verification fails, attempt 2 ONCE, adding the failure list
+  to the user message. If that also fails, or any HTTP error or timeout occurs, use the
+  template narrative with a fallback_reason naming the cause. Never more than 2 LLM
+  calls. Never raise to the caller because of an LLM problem.
+- the template narrative is also passed through verify_narrative; if the template ever
+  fails verification, raise an internal error (that is a bug, and tests must prevent it).
+Narrative schema: {summary: str, habits: [{key, explanation, rule}]} with the field
+lengths capped (summary 300 chars, explanation 400, rule 250).
+
+6) SYSTEM PROMPT (prompts/narrative_system.md): written for the model. It must say: you
+are explaining a trader's own computed statistics; use ONLY facts in the JSON; every
+number must be written with digits, copied from the facts (rounded to the nearest
+rupee is fine); cite at most one trade id per habit; keep each explanation to two
+sentences in plain English for a retail trader; write each rule by restating the
+approved_rule in your own words without changing any number; never give advice about
+what to buy or sell, never predict markets, never mention anything not in the JSON;
+output strict JSON matching the schema with no preamble and no code fences.
+
+7) TESTS
+Verifier (test_verifier.py): passes a correct narrative; rejects a number not in facts
+(for example a made-up rupee total); rejects an unknown trade id; rejects an unknown
+date; tolerance: accepts "about ₹98,000" for 97,841.20 and rejects 5% off; Indian and
+western grouping both parse; "1.5 lakh" and "98k" convert; percentage versus fraction;
+approved_rule numbers allowed in the rule only; extra or missing habit keys fail; order
+mismatch fails; forbidden phrases fail (one test per phrase family); all failures
+returned together; a hallucinated narrative claiming a loss of ₹2,00,000 is rejected.
+LLM and orchestrator (test_llm.py, transport mocked): no key makes zero HTTP calls and
+returns the template; a good mocked LLM response gives source "llm"; invalid JSON then
+a good second response gives source "llm" with llm_attempts 2; invalid twice falls back
+with a reason; verification failure triggers exactly one retry and the retry message
+contains the failures; HTTP 500 and a timeout fall back without raising; never more than
+2 calls; zero habits makes no LLM call.
+Self-consistency (parametrised over ALL committed datasets, through parse -> pair ->
+detect -> rank -> build_facts): the template narrative passes verify_narrative on every
+dataset where material is True, and the facts bundle for clean.csv yields the
+"nothing material" message. Also assert determinism: the same input gives byte-identical
+facts JSON.
+
+8) PLAUSIBILITY CHECK (print only, no code change): for every committed dataset print
+n_trades, gross_pnl_inr, gross_loss_inr, total_attributed_cost_inr, and the ratio
+total_attributed_cost_inr / gross_loss_inr. If any ratio exceeds 1.0, STOP and report;
+do not change ranking or any detector.
+
+9) MANUAL SMOKE (not a test): add `python -m app.narrative <path-to-csv>` that runs the
+full pipeline and prints the facts, the narrative, the source, the fallback_reason, and
+the verification report. Run it on mixed.csv with no key and show me the output.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 7: narrative layer and
+verifier" with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit with
+the message "feat(narrative): grounded explanations with verifier and template
+fallback", and push to origin main. Show me `git status` and `git log --oneline -3`
+afterwards. Never commit .env, API keys, or node_modules. If tests fail, do not
+commit; fix first.
+
+Result: worked. Orchestrator implemented in backend/app/narrative.py with build_facts and generate_narrative. Grounding verifier in backend/app/verifier.py checks numbers (Indian/western grouping, lakh/k suffixes, percentages, multiples, ordinals), trade IDs, dates, structure, and forbidden phrases. Deterministic templates in backend/app/llm/templates.py with fixed approved rules. Unified client in backend/app/llm/client.py. All 153 tests pass with network-blocking autouse fixture in conftest.py. Template self-consistency proved on all 8 committed datasets. Plausibility check: all ratios <= 1.0 (max 0.5933 on mixed.csv). Manual smoke runs and verifies cleanly.

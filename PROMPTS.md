@@ -840,3 +840,238 @@ the message "feat(detectors): averaging_down", and push to origin main. Show me
 node_modules. If tests fail, do not commit; fix first.
 
 Result: worked. AveragingDownDetector implemented in backend/app/detectors/averaging_down.py with fixed thresholds (MIN_FLAGGED=3, CONFIDENCE_DIVISOR=6). Single_averaging_down.csv: precision=1.000, recall=1.000, cost=₹6,879.95 vs injected=₹8,373.05 (ratio 0.822, within [0.5, 2.0]). Clean.csv, mixed.csv, and all other single_* datasets return None (0 false positives). Multi-seed: clean 0/30 fires, planted 30/30 detected (100%). make data byte-identical. 102 tests pass, ruff clean.
+
+## Prompt 6: ranking and pipeline
+
+Step 6: implement ranking in backend/app/ranking.py and add ONE new module,
+backend/app/pipeline.py (this is the only tree addition). Tests go in
+backend/tests/test_ranking.py (replace the skipped placeholder).
+
+RULES: constants below are fixed. If an end-to-end test fails, STOP and report the
+numbers and your diagnosis instead of adjusting a constant or loosening a test. In
+your final summary state whether any detector file, threshold, generator file, or
+committed dataset changed (expected: none).
+
+DETECTOR REGISTRY
+In app/detectors/__init__.py expose ALL_DETECTORS: the five detector instances in a
+fixed order (holding_losers, revenge_trading, overtrading, oversizing,
+averaging_down).
+
+RANKING (ranking.py), named constants:
+MIN_CONFIDENCE = 0.25, MIN_COST_INR = 500, MAX_HABITS = 3.
+rank_habits(results: list[HabitResult], trades: list[Trade]) -> RankedResult
+1. Drop results with confidence < MIN_CONFIDENCE or estimated_cost_inr < MIN_COST_INR.
+   Record each dropped habit with the reason in `dropped`.
+2. Sort by estimated_cost_inr descending; ties broken by key alphabetically.
+3. Overlap handling (greedy, in sorted order): for each habit, overlap_share = (flagged
+   trade ids already claimed by higher-ranked habits) / (its flagged trade ids).
+   attributed_cost_inr = estimated_cost_inr * (1 - overlap_share), rounded to 2. Claim
+   its ids. Document in the docstring that this is a proportional-by-count
+   approximation, not an exact per-trade attribution. Record each overlap as
+   {habits: [a, b], shared_trade_ids: [...]}.
+4. Re-sort by attributed_cost_inr descending (same tie-break), keep the top MAX_HABITS.
+5. RankedResult fields: habits (each: the HabitResult fields plus attributed_cost_inr
+   and overlap_share), total_attributed_cost_inr (sum over the kept habits),
+   overlaps, dropped, material (bool: True if at least one habit is kept), reason
+   (when material is False, a plain sentence such as "No habit cleared the evidence
+   bar this month"), and context {n_trades, gross_pnl_inr, gross_loss_inr, win_rate}.
+   One habit is a valid result; do not require two.
+
+PIPELINE (pipeline.py)
+run_pipeline(source) -> PipelineResult: parse_orders -> pair_orders -> run every
+detector in ALL_DETECTORS -> rank_habits. PipelineResult includes the IngestResult
+warnings and counts, pairing anomalies, the RankedResult, and the full list of raw
+detector outputs (needed by the evals). A detector raising an exception must NOT crash
+the pipeline: catch it, log it, and record it in a `detector_errors` list. IngestError
+propagates unchanged.
+
+TESTS (test_ranking.py)
+Unit tests with fabricated HabitResults:
+- ordering by cost; tie-break by key; cap at 3; MIN_CONFIDENCE and MIN_COST_INR drops
+  recorded with reasons
+- overlap: two habits sharing half their ids -> exact attributed cost; fully
+  overlapping lower habit -> attributed cost 0 and it is still reported; total is the
+  sum of attributed costs
+- zero habits -> material False with a reason; one habit -> material True
+- determinism; detector exception is captured, not raised
+
+END-TO-END (parse -> pair -> detect -> rank) on the committed datasets:
+- clean.csv: material is False.
+- Each single_* dataset: the planted habit is rank 1 and is the ONLY habit kept.
+- mixed.csv: the kept habits are exactly the planted set. Print ranks, costs,
+  attributed costs, confidences, and overlaps.
+- messy.csv: pipeline completes, warnings present, no detector_errors.
+- Print the confidence of every planted habit on every dataset. If a planted habit is
+  dropped by MIN_CONFIDENCE or MIN_COST_INR, STOP and report instead of changing the
+  constants.
+
+Update PROMPTS.md: append this prompt verbatim as "## Prompt 6: ranking and pipeline"
+with a "Result:" line. Do not tidy my wording.
+
+GIT: when `make test` and `ruff check .` pass, stage only relevant files, commit with
+the message "feat(ranking): top-3 selection, overlap handling, pipeline", and push to
+origin main. Show me `git status` and `git log --oneline -3` afterwards. Never commit
+.env, API keys, or node_modules. If tests fail, do not commit; fix first.
+The mixed.csv printout: ranks, estimated cost, attributed cost, confidence, and overlaps.
+The confidence of every planted habit on every dataset.
+The integrity statement, with no detector file, threshold, or dataset changed.
+The git log.
+
+If any planted habit is dropped by the confidence or cost bar, Antigravity should stop and report it rather than adjust a constant. If it does, paste the numbers and we’ll decide together.
+
+Result: stopped and reported per instructions. Holding_losers confidence fell below MIN_CONFIDENCE (0.25) on single_holding_losers.csv (0.09), mixed.csv (0.24), and messy.csv (0.15) because the disparity factor used the median hold of all losers instead of flagged outlier losers.
+
+## Prompt 6b: holding_losers confidence fix
+
+### Stop and Report: Planted Habit Dropped by `MIN_CONFIDENCE`
+
+As required by the Step 6 rules:
+> *"Print the confidence of every planted habit on every dataset. If a planted habit is dropped by MIN_CONFIDENCE or MIN_COST_INR, STOP and report instead of changing the constants. If any planted habit is dropped by the confidence or cost bar, Antigravity should stop and report it rather than adjust a constant. If it does, paste the numbers and we’ll decide together."*
+
+`holding_losers` was detected by its detector with significant estimated rupee cost on all datasets where it is planted, but its computed **`confidence` falls below `MIN_CONFIDENCE = 0.25`** on `single_holding_losers.csv` (0.09), `mixed.csv` (0.24), and `messy.csv` (0.15). Consequently, `rank_habits` drops it during Step 1 filtering.
+
+---
+
+### 1. Confidence of Every Planted Habit on Every Dataset
+
+| Dataset | Planted Habit | Intensity | Estimated Cost | Confidence | Threshold (`>= 0.25`) | Status in Ranking |
+|---|---|---|---|---|---|---|
+| `clean.csv` | *(None)* | — | — | — | — | **`material = False`** ✅ |
+| `single_holding_losers.csv` | **`holding_losers`** | **medium** | **₹56,518.88** | **0.09** | **0.09 < 0.25** | ❌ **DROPPED** (`material = False`) |
+| `single_revenge_trading.csv` | **`revenge_trading`** | **medium** | **₹87,898.20** | **1.00** | 1.00 ≥ 0.25 | ✅ **KEPT (Rank 1)** |
+| `single_overtrading.csv` | **`overtrading`** | **medium** | **₹34,666.50** | **0.75** | 0.75 ≥ 0.25 | ✅ **KEPT (Rank 1)** |
+| `single_oversizing.csv` | **`oversizing`** | **medium** | **₹130,727.40** | **1.00** | 1.00 ≥ 0.25 | ✅ **KEPT (Rank 1)** |
+| `single_averaging_down.csv` | **`averaging_down`** | **medium** | **₹6,879.95** | **1.00** | 1.00 ≥ 0.25 | ✅ **KEPT (Rank 1)** |
+| `mixed.csv` | **`holding_losers`** | **high** | **₹97,841.20** | **0.24** | **0.24 < 0.25** | ❌ **DROPPED** |
+| | **`revenge_trading`** | **medium** | **₹48,177.00** | **1.00** | 1.00 ≥ 0.25 | ✅ **KEPT (Rank 1)** |
+| | **`overtrading`** | **low** | **₹22,629.00** | **0.50** | 0.50 ≥ 0.25 | ✅ **KEPT (Rank 2)** |
+| `messy.csv` | **`holding_losers`** | **high** | **₹84,499.65** | **0.15** | **0.15 < 0.25** | ❌ **DROPPED** |
+| | **`revenge_trading`** | **medium** | **₹58,032.45** | **1.00** | 1.00 ≥ 0.25 | ✅ **KEPT (Rank 1)** |
+| | **`overtrading`** | **low** | **₹31,281.75** | **0.50** | 0.50 ≥ 0.25 | ✅ **KEPT (Rank 2)** |
+
+*(Note: `messy.csv` completes through `run_pipeline` with 9 warnings and 0 detector errors).*
+
+---
+
+### 2. Diagnosis: Why is `holding_losers` Confidence Below 0.25?
+
+In [backend/app/detectors/holding_losers.py](file:///Users/mohammadadnankhan/Desktop/trademirror/backend/app/detectors/holding_losers.py#L90-L95), confidence is computed per the Step 5a formula:
+$$\text{confidence} = \min\left(1, \frac{\text{flagged}}{10}\right) \times \min\left(1, \max\left(0, \frac{\frac{\text{median\_loser\_hold}}{\text{median\_winner\_hold}} - 1.0}{2.0}\right)\right)$$
+
+For $\text{confidence} \ge 0.25$ (when sample saturation is 1.0), the formula mathematically requires:
+$$\frac{\text{median\_loser\_hold}}{\text{median\_winner\_hold}} \ge 1.50$$
+
+However, in [data/generator.py](file:///Users/mohammadadnankhan/Desktop/trademirror/data/generator.py#L400-L420), holding duration is only planted on a **subset** of losers:
+- **Medium intensity** (`single_holding_losers.csv`): only **35%** of losing trades have prolonged hold times. The median (50th percentile) is dominated by the remaining 65% normal losers.
+  - Winner median hold: **21.5 min**
+  - Loser median hold: **25.5 min**
+  - Hold ratio: $\frac{25.5}{21.5} = \mathbf{1.19}$
+  - Confidence: $1.0 \times \frac{1.19 - 1.0}{2.0} = \mathbf{0.09}$
+- **High intensity** (`mixed.csv`): **60%** of losing trades are prolonged, but because 40% are unaffected:
+  - Winner median hold: **21.0 min**
+  - Loser median hold: **31.0 min**
+  - Hold ratio: $\frac{31.0}{21.0} = \mathbf{1.48}$ (just shy of 1.50)
+  - Confidence: $1.0 \times \frac{1.48 - 1.0}{2.0} = \mathbf{0.24}$ (0.01 below 0.25)
+- **High intensity** (`messy.csv`):
+  - Winner median hold: **23.0 min**, Loser median hold: **30.0 min**
+  - Hold ratio: $\mathbf{1.30}$
+  - Confidence: $1.0 \times \frac{1.30 - 1.0}{2.0} = \mathbf{0.15}$
+
+---
+
+### 3. Printout on `mixed.csv`
+
+#### Current behavior (with `MIN_CONFIDENCE = 0.25` strictly enforced):
+- **Kept habits (2)**:
+  1. `revenge_trading`: estimated cost **₹48,177.00**, attributed cost **₹48,177.00**, confidence **1.00**, overlap **0.0%**
+  2. `overtrading`: estimated cost **₹22,629.00**, attributed cost **₹22,629.00**, confidence **0.50**, overlap **0.0%**
+- **Dropped habits (1)**:
+  - `holding_losers`: estimated cost **₹97,841.20**, confidence **0.24** (reason: `confidence 0.24 < 0.25`)
+- **Total Attributed Cost**: **₹70,806.00**
+- **Overlaps**: `[]`
+
+#### If `holding_losers` is retained (clears the confidence bar):
+- **Kept habits (3)**:
+  1. `holding_losers`: estimated cost **₹97,841.20**, attributed cost **₹97,841.20**, confidence **0.24**, overlap **0.0%**
+  2. `revenge_trading`: estimated cost **₹48,177.00**, attributed cost **₹28,103.25**, confidence **1.00**, overlap **41.67%** (shares 5 of 12 trades with `holding_losers`)
+  3. `overtrading`: estimated cost **₹22,629.00**, attributed cost **₹22,629.00**, confidence **0.50**, overlap **0.0%**
+- **Total Attributed Cost**: **₹148,573.45**
+- **Overlaps**: `[{'habits': ['holding_losers', 'revenge_trading'], 'shared_trade_ids': ['P0010', 'P0014', 'P0064', 'P0074', 'P0078']}]`
+
+---
+
+### 4. Integrity Statement
+
+- **Thresholds modified**: **None** (`MIN_CONFIDENCE = 0.25`, `MIN_COST_INR = 500`, `MAX_HABITS = 3` are strictly implemented as given).
+- **Existing detector files modified**: **None**.
+- **Generator file modified**: **None**.
+- **Committed datasets modified**: **None**.
+
+---
+
+### Decision Options for Moving Forward
+
+Please let me know how you would like to proceed:
+
+1. **Option A (Update `holding_losers.py` confidence formula)**: Change the disparity factor denominator or baseline so that a ratio of 1.15–1.20 yields confidence $\ge 0.25$ (e.g. based on flagged ratio or adjusting the disparity denominator).
+2. **Option B (Adjust `MIN_CONFIDENCE` in `ranking.py`)**: Lower `MIN_CONFIDENCE` (e.g. to `0.08` or similar).
+3. **Option C (Update `generator.py` hold duration planting)**: Increase hold durations or planting ratios for holding losers in `generator.py` so the median loser hold time shifts $\ge 1.5\times$ winner hold time, and regenerate `data/`.
+
+DECISION on your Step 6 report: Option A. Do NOT change MIN_CONFIDENCE,
+MIN_COST_INR, MAX_HABITS, any other detector, or the generator.
+
+Rationale: the confidence formula used the median hold of ALL losers, which is the
+wrong statistic when only a subset of losers is affected. Fix the formula on
+principle; do not fit it to the datasets.
+
+PART A: holding_losers confidence only (backend/app/detectors/holding_losers.py)
+Detection logic, thresholds, flagged ids, and estimated cost must stay byte-for-byte
+unchanged. Only the confidence value changes.
+New confidence = min(1, flagged_count / 10) *
+                 min(1, max(0, (flagged_median_hold / median_winner_hold - 1) / 2))
+where flagged_median_hold is the median hold_minutes of the FLAGGED losers.
+- Add flagged_median_hold_min and flagged_hold_ratio to metrics. Keep the existing
+  hold_ratio metric (all losers) for transparency.
+- Update the docstring and formula_note wording to explain confidence plainly.
+- Edit existing tests ONLY where they assert the old confidence value; recompute the
+  expected value by hand and list each edited assertion in your summary.
+- Add tests: (a) confidence is higher when flagged losers are held longer, other
+  inputs equal; (b) exactly 3 flagged with a flagged ratio of 2.0 gives
+  0.3 * 0.5 = 0.15; (c) 10+ flagged with a ratio of 3.0 or more gives 1.0;
+  (d) the detector still returns None in every case it did before.
+
+PART B: regression proof (print before/after)
+For every committed dataset, print the holding_losers result before and after your
+change: fires or not, flagged ids, estimated cost, confidence. Assert that fires,
+flagged ids, and cost are IDENTICAL; only confidence may differ. Re-run the multi-seed
+holding_losers checks with the same seeds as in Step 5a and the lots-fix step; the
+clean fire count and the planted detection count must be exactly what they were.
+
+PART C: finish Step 6 as originally specified
+Re-run the Step 6 end-to-end tests with no other change. Expected: clean.csv
+material False; each single_* has its planted habit as rank 1 and the only habit
+kept; mixed.csv keeps exactly holding_losers, revenge_trading, and overtrading.
+Print the new confidence of every planted habit on every dataset, and for mixed.csv
+print ranks, estimated cost, attributed cost, confidence, and overlaps. If ANY planted
+habit is still dropped, STOP and report again.
+
+PROMPTS.md: log your Step 6 stop-and-report and this decision message verbatim as
+"## Prompt 6b: holding_losers confidence fix" with a Result line. Do not tidy my
+wording.
+
+GIT: two commits, pushed to origin main, only when `make test` and `ruff check .`
+pass:
+1. "fix(detectors): holding_losers confidence uses flagged-trade hold ratio"
+   (Part A and its tests)
+2. "feat(ranking): top-3 selection, overlap handling, pipeline"
+Show me `git status` and `git log --oneline -4` afterwards. Never commit .env, API
+keys, or node_modules. In your final summary, state explicitly: every threshold,
+detector file, generator file, dataset, and existing test changed (expected: only
+holding_losers.py, its confidence assertions, and the new Step 6 files).
+What to check in the reply
+Part B’s before/after table. Fires, flagged ids, and cost must be identical on every dataset, with only the confidence column changing. If any of the other three differ, the fix changed detection, which it must not do.
+Multi-seed counts. They should match the earlier runs exactly. The confidence score doesn’t affect whether the detector fires, so any change means something else moved.
+mixed.csv. All three planted habits should be kept. Expect holding_losers first, then revenge_trading with an attributed cost lower than its raw estimate (earlier numbers: 41.67% overlap, about ₹28,103 attributed). That is the proportional-attribution rule working.
+The confidence table. A planted habit that’s still dropped means we’ve got a second problem, and Antigravity should stop again.
+
+Result: worked. Holding_losers confidence updated to use flagged loser hold ratio, leaving detection logic, thresholds, flagged IDs, and costs 100% byte-for-byte identical while lifting confidence on planted datasets (single_holding_losers: 1.00, mixed: 0.83, messy: 1.00). All single_* datasets isolate their planted habit at Rank 1. Mixed.csv retains holding_losers (Rank 1, ₹97,841.20), revenge_trading (Rank 2, ₹28,103.25 attributed with 41.67% overlap), and overtrading (Rank 3, ₹22,629.00). Clean.csv material=False. 122 tests pass, ruff clean.

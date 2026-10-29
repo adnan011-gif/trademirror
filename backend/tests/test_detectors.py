@@ -97,6 +97,10 @@ def test_holding_losers_fires_on_constructed_case() -> None:
     assert res.metrics["flagged_count"] == 4
     assert res.metrics["baseline_loss_inr"] == 1000.0
     assert res.metrics["median_winner_hold_min"] == 20.0
+    assert res.metrics["flagged_median_hold_min"] == 50.0
+    assert res.metrics["flagged_hold_ratio"] == 2.5
+    # confidence = min(1, 4/10) * min(1, (2.5 - 1)/2) = 0.4 * 0.75 = 0.30
+    assert res.confidence == 0.30
 
 
 def test_holding_losers_minimum_sample_guards() -> None:
@@ -291,6 +295,96 @@ def test_holding_losers_multi_seed_robustness() -> None:
     detection_rate = planted_fired / 30.0
     print(f"Multi-seed planted months detected: {planted_fired}/30 ({detection_rate:.1%})")
     assert detection_rate >= 0.8, f"Detection rate {detection_rate:.1%} < 80% ({planted_fired}/30)"
+
+
+def test_holding_losers_confidence_higher_when_held_longer() -> None:
+    """(a) Confidence is higher when flagged losers are held longer, all else equal."""
+    det = HoldingLosersDetector()
+    winners = [_make_trade(f"W{i}", gross_pnl=1000.0, hold_minutes=20.0) for i in range(6)]
+    normal_losers = [_make_trade(f"L{i}", gross_pnl=-1000.0, hold_minutes=22.0) for i in range(6)]
+
+    # Case 1: Flagged losers held 45 min (flagged ratio = 45/20 = 2.25)
+    flagged_45 = [_make_trade(f"F{i}", gross_pnl=-3000.0, hold_minutes=45.0) for i in range(4)]
+    res_45 = det.detect(winners + normal_losers + flagged_45)
+    assert res_45 is not None
+
+    # Case 2: Flagged losers held 70 min (flagged ratio = 70/20 = 3.50)
+    flagged_70 = [_make_trade(f"F{i}", gross_pnl=-3000.0, hold_minutes=70.0) for i in range(4)]
+    res_70 = det.detect(winners + normal_losers + flagged_70)
+    assert res_70 is not None
+
+    assert res_70.confidence > res_45.confidence, (
+        f"Expected higher confidence for longer hold, "
+        f"got {res_70.confidence} vs {res_45.confidence}"
+    )
+
+
+def test_holding_losers_confidence_exact_three_flagged_ratio_two() -> None:
+    """(b) Exactly 3 flagged with a flagged ratio of 2.0 gives 0.3 * 0.5 = 0.15."""
+    winners = [_make_trade(f"W{i}", gross_pnl=1000.0, hold_minutes=20.0) for i in range(6)]
+    normal_losers = [_make_trade(f"L{i}", gross_pnl=-1000.0, hold_minutes=23.0) for i in range(6)]
+
+    # 3 flagged losers with hold_minutes = 40.001 (> 2.0 * 20 = 40.0)
+    flagged = [_make_trade(f"F{i}", gross_pnl=-3000.0, hold_minutes=40.001) for i in range(3)]
+
+    det = HoldingLosersDetector()
+    res = det.detect(winners + normal_losers + flagged)
+    assert res is not None
+
+    # sample_factor = 3 / 10 = 0.3
+    # disparity_factor = (2.0 - 1.0) / 2.0 = 0.5
+    # confidence = 0.3 * 0.5 = 0.15
+    assert abs(res.confidence - 0.15) < 0.01
+
+
+def test_holding_losers_confidence_ten_plus_flagged_ratio_three_gives_one() -> None:
+    """(c) 10+ flagged with a ratio of 3.0 or more gives 1.0."""
+    winners = [_make_trade(f"W{i}", gross_pnl=1000.0, hold_minutes=20.0) for i in range(6)]
+    normal_losers = [_make_trade(f"L{i}", gross_pnl=-1000.0, hold_minutes=22.0) for i in range(5)]
+
+    # 10 flagged losers with hold_minutes = 60.0 (3.0x winner baseline of 20.0)
+    flagged = [_make_trade(f"F{i}", gross_pnl=-3000.0, hold_minutes=60.0) for i in range(10)]
+
+    det = HoldingLosersDetector()
+    res = det.detect(winners + normal_losers + flagged)
+    assert res is not None
+
+    # sample_factor = min(1, 10/10) = 1.0
+    # disparity_factor = min(1, (3.0 - 1.0) / 2.0) = 1.0
+    # confidence = 1.0 * 1.0 = 1.0
+    assert res.confidence == 1.0
+
+
+def test_holding_losers_still_returns_none_in_all_negative_cases() -> None:
+    """(d) The detector still returns None in every case it did before."""
+    det = HoldingLosersDetector()
+
+    # Few winners (< 5)
+    w_few = [_make_trade(f"W{i}", 1000.0, 20.0) for i in range(4)]
+    l_ok = [_make_trade(f"L{i}", -2000.0, 60.0) for i in range(10)]
+    assert det.detect(w_few + l_ok) is None
+
+    # Few losers (< 5)
+    w_ok = [_make_trade(f"W{i}", 1000.0, 20.0) for i in range(10)]
+    l_few = [_make_trade(f"L{i}", -2000.0, 60.0) for i in range(4)]
+    assert det.detect(w_ok + l_few) is None
+
+    # No disparity (losers held equal to winners)
+    w_eq = [_make_trade(f"W{i}", 1000.0, 25.0) for i in range(10)]
+    l_eq = [_make_trade(f"L{i}", -1000.0, 25.0) for i in range(10)]
+    assert det.detect(w_eq + l_eq) is None
+
+    # Only 2 flagged (< MIN_FLAGGED=3)
+    l_2flag = (
+        [_make_trade(f"L{i}", -1000.0, 22.0) for i in range(8)]
+        + [_make_trade(f"F{i}", -2000.0, 60.0) for i in range(2)]
+    )
+    assert det.detect(w_ok + l_2flag) is None
+
+    # Estimated cost <= 0 (flagged losers lost less than baseline)
+    l_cheap = [_make_trade(f"L{i}", -1000.0, 22.0) for i in range(8)]
+    f_cheap = [_make_trade(f"F{i}", -500.0, 60.0) for i in range(4)]
+    assert det.detect(w_ok + l_cheap + f_cheap) is None
 
 
 # =====================================================================

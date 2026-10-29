@@ -12,7 +12,7 @@ FORMULA & THRESHOLDS:
 2. Calculate median hold duration for winners (median_winner_hold) and losers (median_loser_hold).
 3. Flag losing trades where hold_minutes > HOLD_MULTIPLE (2.0) * median_winner_hold.
 4. Effect-size guard: Require len(flagged) >= MIN_FLAGGED (3) AND
-   median_loser_hold >= MEDIAN_RATIO_MIN (1.5) * median_winner_hold; else None.
+   median_loser_hold >= MEDIAN_RATIO_MIN (1.10) * median_winner_hold; else None.
 5. Baseline loss computation:
    baseline_loss = median |gross_pnl| of non-flagged losers.
    If len(non_flagged) < MIN_NON_FLAGGED_LOSERS (3), fallback to median |gross_pnl| of all losers.
@@ -20,7 +20,10 @@ FORMULA & THRESHOLDS:
    estimated_cost_inr = sum(max(0, |gross_pnl| - baseline_loss) for trade in flagged).
    If estimated_cost_inr <= 0, return None.
 7. Confidence:
-   confidence = min(1.0, len(flagged) / 10.0) * min(1.0, max(0.0, (hold_ratio - 1.0) / 2.0)).
+   confidence = min(1.0, len(flagged) / 10.0)
+                * min(1.0, max(0.0, (flagged_hold_ratio - 1.0) / 2.0))
+   where flagged_hold_ratio = flagged_median_hold / median_winner_hold, evaluated
+   specifically on the flagged outlier losers.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ MIN_NON_FLAGGED_LOSERS = 3
 
 class HoldingLosersDetector(BaseDetector):
     """Detector for the habit of holding losing trades significantly longer than winning trades."""
+
+    key = "holding_losers"
 
     def detect(self, trades: list[Trade]) -> HabitResult | None:
         """Scan trades for holding losers habit."""
@@ -88,9 +93,12 @@ class HoldingLosersDetector(BaseDetector):
             return None
 
         # Step 7: Confidence calculation
-        # Product of flagged sample saturation (saturates at 10) and hold disparity
+        # Evaluated on flagged outlier losers: sample factor saturates at 10,
+        # disparity scales from 1.0x (conf 0) to 3.0x+ (conf 1.0) vs winner baseline.
+        flagged_median_hold = float(statistics.median([t.hold_minutes for t in flagged]))
+        flagged_hold_ratio = flagged_median_hold / median_winner_hold
         sample_factor = min(1.0, len(flagged) / 10.0)
-        disparity_factor = min(1.0, max(0.0, (hold_ratio - 1.0) / 2.0))
+        disparity_factor = min(1.0, max(0.0, (flagged_hold_ratio - 1.0) / 2.0))
         confidence = sample_factor * disparity_factor
 
         # Step 8: Assemble HabitResult
@@ -101,6 +109,8 @@ class HoldingLosersDetector(BaseDetector):
             "median_loser_hold_min": round(median_loser_hold, 2),
             "hold_ratio": round(hold_ratio, 2),
             "flagged_count": len(flagged),
+            "flagged_median_hold_min": round(flagged_median_hold, 2),
+            "flagged_hold_ratio": round(flagged_hold_ratio, 2),
             "baseline_loss_inr": round(baseline_loss, 2),
         }
 
@@ -108,9 +118,11 @@ class HoldingLosersDetector(BaseDetector):
             f"Across {len(winners)} winning trades, your median hold time was "
             f"{median_winner_hold:.1f} minutes, while {len(losers)} losing trades were held "
             f"for a median of {median_loser_hold:.1f} minutes ({hold_ratio:.2f}x longer). "
-            f"Flagged {len(flagged)} trades held past {hold_threshold:.1f} minutes "
-            f"(2.0x winner baseline), costing an estimated ₹{estimated_cost_inr:,.2f} in excess "
-            f"decay beyond your standard loss baseline of ₹{baseline_loss:,.2f}."
+            f"Flagged {len(flagged)} outlier losers held for a median of "
+            f"{flagged_median_hold:.1f} minutes ({flagged_hold_ratio:.2f}x winner baseline, "
+            f"past {hold_threshold:.1f}m threshold), costing an estimated "
+            f"₹{estimated_cost_inr:,.2f} in excess decay beyond your standard loss baseline "
+            f"of ₹{baseline_loss:,.2f}."
         )
 
         return HabitResult(

@@ -1,0 +1,1 @@
+"""TradeMirror backend application package."""

@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import App from '../App';
 
-import { mockSamples, mockMixedResponse, mockCleanResponse } from './fixtures';
+import {
+  mockSamples,
+  mockMixedResponse,
+  mockCleanResponse,
+  mockTruncatedEvidenceResponse,
+} from './fixtures';
 import { isAnalysisResponse } from '../types';
 
 describe('TradeMirror Frontend Application Tests', () => {
@@ -311,5 +316,109 @@ describe('TradeMirror Frontend Application Tests', () => {
     const errorPanel = await screen.findByTestId('error-panel');
     expect(errorPanel).toHaveTextContent(/Received an invalid response format from the server/i);
     expect(errorPanel).toHaveTextContent('req-malformed-999');
+  });
+
+  it('9. renders three fixtures and asserts every displayed number equals the fixture value', async () => {
+    // 1. Not-material fixture (mockCleanResponse)
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/samples') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: () => Promise.resolve(mockSamples),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve(mockCleanResponse),
+      } as Response);
+    });
+
+    const cleanRender = render(<App />);
+    const runBtnClean = await cleanRender.findByRole('button', { name: /Run Analysis/i });
+    fireEvent.click(runBtnClean);
+
+    // Verify not-material title from summary and exact trade count (95)
+    expect(await cleanRender.findByText(mockCleanResponse.summary)).toBeInTheDocument();
+    expect(cleanRender.getByText(`${mockCleanResponse.dataset.n_trades} trades analysed.`)).toBeInTheDocument();
+    cleanRender.unmount();
+
+    // 2. Mixed-like fixture (mockMixedResponse)
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/samples') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: () => Promise.resolve(mockSamples),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve(mockMixedResponse),
+      } as Response);
+    });
+
+    const mixedRender = render(<App />);
+    const runBtnMixed = await mixedRender.findByRole('button', { name: /Run Analysis/i });
+    fireEvent.click(runBtnMixed);
+
+    // Headline: cost 148,573, n_trades 121, win_rate 40.5%, gross_pnl -1,27,453
+    expect(await mixedRender.findByText(/3 habits cost you about ₹1,48,573 this month/i)).toBeInTheDocument();
+    expect(mixedRender.getByText(/121 trades, 40.5% winners, gross P&L -₹1,27,453\./i)).toBeInTheDocument();
+
+    // Habit cards: costs ₹97,841, ₹28,103 (with ₹48,177 before overlap), ₹22,629
+    expect(mixedRender.getByText('₹97,841')).toBeInTheDocument();
+    expect(mixedRender.getByText('₹28,103')).toBeInTheDocument();
+    expect(mixedRender.getByText(/₹48,177 before removing overlap with/i)).toBeInTheDocument();
+    expect(mixedRender.getByText('₹22,629')).toBeInTheDocument();
+    mixedRender.unmount();
+
+    // 3. Truncated evidence fixture with n_trades = 77 and evidence 25 of 41 (mockTruncatedEvidenceResponse)
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/api/samples') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: () => Promise.resolve(mockSamples),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve(mockTruncatedEvidenceResponse),
+      } as Response);
+    });
+
+    const truncRender = render(<App />);
+    const runBtnTrunc = await truncRender.findByRole('button', { name: /Run Analysis/i });
+    fireEvent.click(runBtnTrunc);
+
+    // Headline with 77 trades, 42.8% win rate, -₹65,400 gross P&L, ₹52,100 cost
+    expect(await truncRender.findByText(/1 habit cost you about ₹52,100 this month/i)).toBeInTheDocument();
+    expect(truncRender.getByText(/77 trades, 42.8% winners, gross P&L -₹65,400\./i)).toBeInTheDocument();
+    expect(truncRender.getByText('₹52,100')).toBeInTheDocument();
+
+    // Open evidence modal and assert dynamic truncation numbers 25 of 41
+    const showTradesBtn = truncRender.getByRole('button', { name: /Show the trades/i });
+    fireEvent.click(showTradesBtn);
+
+    const dialog = await truncRender.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(
+      truncRender.getByText('Showing the 25 largest losses of 41 flagged trades'),
+    ).toBeInTheDocument();
+
+    // Assert exactly 25 rows rendered in the table
+    const tableRows = dialog.querySelectorAll('tbody tr');
+    expect(tableRows.length).toBe(25);
+    truncRender.unmount();
   });
 });

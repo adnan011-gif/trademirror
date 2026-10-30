@@ -224,8 +224,7 @@ export const App: React.FC = () => {
               <div className="not-material-box" data-testid="not-material-state">
                 <h2 className="not-material-title">{analysis.summary}</h2>
                 <p className="not-material-meta">
-                  Across {analysis.dataset.n_trades} trades this month, no behavioral pattern
-                  caused sufficient loss to clear our evidence threshold.
+                  {analysis.dataset.n_trades} trades analysed.
                 </p>
                 <button type="button" className="primary-btn" onClick={handleStartOver}>
                   Try another month

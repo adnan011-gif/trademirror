@@ -18,10 +18,10 @@ export const WarningsBanner: React.FC<WarningsBannerProps> = ({
 
   // Audit count pills
   const relevantCounts: Array<{ label: string; count: number }> = [];
-  if (counts.duplicate_orders) relevantCounts.push({ label: 'Duplicates', count: counts.duplicate_orders });
-  if (counts.rejected_orders) relevantCounts.push({ label: 'Rejected', count: counts.rejected_orders });
+  if (counts.duplicates) relevantCounts.push({ label: 'Duplicates', count: counts.duplicates });
+  if (counts.rejected) relevantCounts.push({ label: 'Rejected', count: counts.rejected });
   if (counts.missing_price) relevantCounts.push({ label: 'Missing Price', count: counts.missing_price });
-  if (counts.invalid_syntax) relevantCounts.push({ label: 'Invalid Format', count: counts.invalid_syntax });
+  if (counts.invalid) relevantCounts.push({ label: 'Invalid', count: counts.invalid });
 
   const shownWarnings = warnings.slice(0, 10);
 

@@ -233,3 +233,77 @@ export const mockCleanResponse: AnalysisResponse = {
     'This is not investment advice.',
   ],
 };
+
+export const mockTruncatedEvidenceResponse: AnalysisResponse = {
+  dataset: {
+    source: 'truncated_sample',
+    n_orders_raw: 154,
+    n_orders_kept: 154,
+    n_trades: 77,
+    counts: {
+      total_rows: 154,
+      valid_orders: 154,
+    },
+  },
+  context: {
+    gross_pnl_inr: -65400.0,
+    gross_loss_inr: 125000.0,
+    win_rate: 0.428,
+    total_attributed_cost_inr: 52100.0,
+  },
+  material: true,
+  summary: 'Your trading this month was impacted by 1 behavioral habit with an attributed cost of ₹52,100.00.',
+  habits: [
+    {
+      key: 'holding_losers',
+      name: 'Holding losing trades too long',
+      rank: 1,
+      attributed_cost_inr: 52100.0,
+      estimated_cost_inr: 52100.0,
+      overlap_share: 0.0,
+      confidence: 0.9,
+      explanation: 'Flagged trades were held significantly longer than winners.',
+      rule: 'Cut losers at 20 minutes.',
+      formula_note: 'Excess loss formula note.',
+      metrics: {
+        flagged_count: 41,
+      },
+      evidence_trades: Array.from({ length: 25 }, (_, i) => ({
+        trade_id: `T${String(i + 1).padStart(4, '0')}`,
+        trading_date: '2024-10-15',
+        entry_time: '2024-10-15T09:30:00+05:30',
+        exit_time: '2024-10-15T10:45:00+05:30',
+        symbol: 'NIFTY',
+        instrument_type: 'CE',
+        strike: 25000,
+        direction: 'BUY',
+        quantity: 50,
+        lots: 1,
+        hold_minutes: 75.0,
+        gross_pnl: -2000.0 - i * 100,
+      })),
+      evidence_total: 41,
+      evidence_truncated: true,
+    },
+  ],
+  overlaps: [],
+  dropped: [],
+  warnings: [],
+  warnings_total: 0,
+  pairing_anomalies: [],
+  narrative: {
+    source: 'template',
+    fallback_reason: null,
+    llm_attempts: 0,
+  },
+  verification: {
+    passed: true,
+    checked_numbers: [52100.0],
+    checked_trade_ids: [],
+    failures: [],
+  },
+  detector_errors: [],
+  disclaimers: [
+    'Gross P&L only; brokerage and taxes not included.',
+  ],
+};

@@ -1601,3 +1601,53 @@ node_modules, or frontend/dist.
 
 Result: worked. Frontend built with strict TypeScript and vanilla CSS adhering to calm/restrained design system, dark mode, tabular numbers, and accessible focus rings. All components implemented: UploadDropzone, SampleDataSelector, HabitCard with overlap note, NextMonthRuleBadge, CalcDrawer, accessible TradeEvidenceModal, Headline, WarningsBanner, and DisclaimerFooter. Full test suite with 8 tests passing under Vitest + Testing Library. Verified against real FastAPI server at localhost:8000 for mixed, clean, messy samples and messy.csv upload. Screenshots captured and saved to docs/screenshots/.
 
+## Prompt 9b: audit the UI numbers
+
+Step 9b: audit and fix. Do not touch backend/, data/, or evals/ unless the audit proves
+the API itself is wrong; in that case STOP and report with evidence instead of editing.
+In your final summary list every file changed.
+
+PART A: AUDIT (read-only, report before changing anything)
+For each of clean, mixed, messy, single_overtrading, single_oversizing:
+1. Fetch /api/sample/<name> with curl and print: n_trades, win_rate, gross_pnl_inr,
+   total_attributed_cost_inr, and per habit: attributed_cost_inr, estimated_cost_inr,
+   overlap_share, evidence_total, len(evidence_trades), plus dataset.counts.
+2. Print what the UI shows for the same fields (read it from the rendered DOM in a
+   headless browser or from a render test; do not paraphrase from memory).
+3. Put both in one table per dataset and mark every difference.
+4. For messy, also print the counts from data/ground_truth/messy.json
+   (expected_ingest_warnings) next to the API counts.
+5. Search frontend/src for any hardcoded numeric literals or hardcoded sentences
+   containing digits (grep for \d in string literals outside tests and CSS) and list them.
+   The "Across N trades..." sentence for the not-material state is the first to check:
+   where does N come from?
+
+PART B: FIX
+- Every number the UI displays must be read from the API response; remove any literal
+  or placeholder. The not-material message must use dataset.n_trades and the API summary
+  text, not a separately written sentence with its own numbers.
+- The evidence modal note must be computed from the response: "Showing the {shown}
+  largest losses of {evidence_total} flagged trades", where shown = evidence_trades.length.
+  Find why it said 10 and fix the cause.
+- Add a test that renders three fixtures (mixed-like, not-material, truncated evidence)
+  and asserts every displayed number equals the fixture value; one test must use a
+  fixture with n_trades = 77 and evidence capped at 25 of 41, so hardcoded values cannot
+  pass.
+- Re-run the click-through for single_overtrading and report: headline, whether the
+  "profitable overall" line appears (gross P&L is positive in that dataset), and the
+  card cost.
+
+PART C: re-verify and re-shoot
+Re-run the Part A comparison after the fix; every row must match. Regenerate the two
+screenshots from the real server.
+
+PROMPTS.md: append this prompt verbatim as "## Prompt 9b: audit the UI numbers" with a
+"Result:" line. Do not tidy my wording.
+
+GIT: when `npm run build`, `npm test`, `make test`, and `ruff check .` pass, commit
+"fix(ui): display only values from the API, correct evidence note" and push to origin
+main. Show me `git status` and `git log --oneline -3`. Never commit .env, API keys,
+node_modules, or frontend/dist.
+
+Result: worked. Audit of 5 sample datasets completed. Identified count property name mismatches in WarningsBanner (duplicates/rejected instead of duplicate_orders/rejected_orders) and hardcoded descriptive text in not-material state. Updated App.tsx to use dataset.n_trades and API summary text directly without hardcoded prose. Corrected WarningsBanner count keys. Added integration test asserting exact numerical equivalence across mixed, not-material, and truncated evidence (n_trades=77, capped at 25 of 41) fixtures. Click-through on single_overtrading verified profitable overall notice and card cost. Regenerated screenshots at 1280px and 360px widths to docs/screenshots/. All frontend and backend tests pass, ruff clean.
+

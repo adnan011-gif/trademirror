@@ -1,0 +1,517 @@
+{
+  "meta": {
+    "git_commit": "dda021cc5026149bae4f4adfb2217f30faba2e93",
+    "run_date": "2026-10-30",
+    "seeds": {
+      "clean": "2000-2099",
+      "intensity": "2100-2549",
+      "combinations": "2600-2639"
+    },
+    "overall_status": "ALL_TARGETS_MET"
+  },
+  "section_1_committed": [
+    {
+      "dataset": "clean",
+      "habit": "none (clean)",
+      "precision": 1.0,
+      "recall": 1.0,
+      "estimated_cost_inr": 0.0,
+      "injected_loss_inr": 0.0,
+      "cost_ratio": 1.0,
+      "confidence": 0.0,
+      "rank": "none"
+    },
+    {
+      "dataset": "single_holding_losers",
+      "habit": "holding_losers",
+      "precision": 1.0,
+      "recall": 1.0,
+      "estimated_cost_inr": 56518.88,
+      "injected_loss_inr": 51028.8,
+      "cost_ratio": 1.1076,
+      "confidence": 1.0,
+      "rank": 1
+    },
+    {
+      "dataset": "single_revenge_trading",
+      "habit": "revenge_trading",
+      "precision": 1.0,
+      "recall": 0.9231,
+      "estimated_cost_inr": 87898.2,
+      "injected_loss_inr": 91213.2,
+      "cost_ratio": 0.9637,
+      "confidence": 1.0,
+      "rank": 1
+    },
+    {
+      "dataset": "single_overtrading",
+      "habit": "overtrading",
+      "precision": 1.0,
+      "recall": 0.7778,
+      "estimated_cost_inr": 34666.5,
+      "injected_loss_inr": 44886.75,
+      "cost_ratio": 0.7723,
+      "confidence": 0.75,
+      "rank": 1
+    },
+    {
+      "dataset": "single_oversizing",
+      "habit": "oversizing",
+      "precision": 1.0,
+      "recall": 0.95,
+      "estimated_cost_inr": 130727.4,
+      "injected_loss_inr": 135033.9,
+      "cost_ratio": 0.9681,
+      "confidence": 1.0,
+      "rank": 1
+    },
+    {
+      "dataset": "single_averaging_down",
+      "habit": "averaging_down",
+      "precision": 1.0,
+      "recall": 1.0,
+      "estimated_cost_inr": 6879.95,
+      "injected_loss_inr": 8373.05,
+      "cost_ratio": 0.8217,
+      "confidence": 1.0,
+      "rank": 1
+    },
+    {
+      "dataset": "mixed",
+      "habit": "holding_losers",
+      "precision": 1.0,
+      "recall": 1.0,
+      "estimated_cost_inr": 97841.2,
+      "injected_loss_inr": 89628.25,
+      "cost_ratio": 1.0916,
+      "confidence": 0.83,
+      "rank": 1
+    },
+    {
+      "dataset": "mixed",
+      "habit": "revenge_trading",
+      "precision": 1.0,
+      "recall": 0.9231,
+      "estimated_cost_inr": 48177.0,
+      "injected_loss_inr": 52878.0,
+      "cost_ratio": 0.9111,
+      "confidence": 1.0,
+      "rank": 2
+    },
+    {
+      "dataset": "mixed",
+      "habit": "overtrading",
+      "precision": 0.8571,
+      "recall": 1.0,
+      "estimated_cost_inr": 22629.0,
+      "injected_loss_inr": 24305.25,
+      "cost_ratio": 0.931,
+      "confidence": 0.5,
+      "rank": 3
+    },
+    {
+      "dataset": "messy",
+      "habit": "holding_losers",
+      "precision": 1.0,
+      "recall": 1.0,
+      "estimated_cost_inr": 84499.65,
+      "injected_loss_inr": 94028.1,
+      "cost_ratio": 0.8987,
+      "confidence": 1.0,
+      "rank": 1
+    },
+    {
+      "dataset": "messy",
+      "habit": "revenge_trading",
+      "precision": 1.0,
+      "recall": 0.9167,
+      "estimated_cost_inr": 58032.45,
+      "injected_loss_inr": 59243.45,
+      "cost_ratio": 0.9796,
+      "confidence": 1.0,
+      "rank": 2
+    },
+    {
+      "dataset": "messy",
+      "habit": "overtrading",
+      "precision": 1.0,
+      "recall": 0.875,
+      "estimated_cost_inr": 31281.75,
+      "injected_loss_inr": 39401.25,
+      "cost_ratio": 0.7939,
+      "confidence": 0.5,
+      "rank": 3
+    }
+  ],
+  "section_2_clean": {
+    "total_months": 101,
+    "kept_months": 0,
+    "kept_fraction": 0.0,
+    "target_max": 0.02,
+    "target_met": true,
+    "fire_counts": {
+      "holding_losers": 0,
+      "revenge_trading": 0,
+      "overtrading": 0,
+      "oversizing": 0,
+      "averaging_down": 0
+    }
+  },
+  "section_3_intensity": {
+    "cells": {
+      "holding_losers": {
+        "low": {
+          "detection_rate": 0.2333,
+          "mean_precision": 0.2333,
+          "mean_recall": 0.2333,
+          "median_cost_ratio": 0.0,
+          "target_met": null
+        },
+        "medium": {
+          "detection_rate": 0.9,
+          "mean_precision": 0.9,
+          "mean_recall": 0.8884,
+          "median_cost_ratio": 1.2109,
+          "target_met": true
+        },
+        "high": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.9923,
+          "median_cost_ratio": 1.0976,
+          "target_met": true
+        }
+      },
+      "revenge_trading": {
+        "low": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.9822,
+          "median_cost_ratio": 1.0,
+          "target_met": null
+        },
+        "medium": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.948,
+          "median_cost_ratio": 0.9908,
+          "target_met": true
+        },
+        "high": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.9201,
+          "median_cost_ratio": 0.9345,
+          "target_met": true
+        }
+      },
+      "overtrading": {
+        "low": {
+          "detection_rate": 0.6333,
+          "mean_precision": 0.6204,
+          "mean_recall": 0.5753,
+          "median_cost_ratio": 0.8256,
+          "target_met": null
+        },
+        "medium": {
+          "detection_rate": 0.8667,
+          "mean_precision": 0.8209,
+          "mean_recall": 0.7371,
+          "median_cost_ratio": 0.8482,
+          "target_met": true
+        },
+        "high": {
+          "detection_rate": 1.0,
+          "mean_precision": 0.9849,
+          "mean_recall": 0.8157,
+          "median_cost_ratio": 0.8005,
+          "target_met": true
+        }
+      },
+      "oversizing": {
+        "low": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.9007,
+          "median_cost_ratio": 0.9417,
+          "target_met": null
+        },
+        "medium": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.8213,
+          "median_cost_ratio": 0.8119,
+          "target_met": true
+        },
+        "high": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 0.7593,
+          "median_cost_ratio": 0.7656,
+          "target_met": true
+        }
+      },
+      "averaging_down": {
+        "low": {
+          "detection_rate": 0.9,
+          "mean_precision": 0.9333,
+          "mean_recall": 0.9333,
+          "median_cost_ratio": 0.8631,
+          "target_met": null
+        },
+        "medium": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 1.0,
+          "median_cost_ratio": 0.8677,
+          "target_met": true
+        },
+        "high": {
+          "detection_rate": 1.0,
+          "mean_precision": 1.0,
+          "mean_recall": 1.0,
+          "median_cost_ratio": 0.8562,
+          "target_met": true
+        }
+      }
+    },
+    "targets_met": true,
+    "weakly_detected_low": [
+      "holding_losers (23.3%)",
+      "overtrading (63.3%)"
+    ]
+  },
+  "section_4_combinations": {
+    "n_months": 40,
+    "exact_match_rate": 0.675,
+    "planted_recall": 0.8762,
+    "spurious_rate": 0.0108,
+    "top_loss_match_rate": 0.825,
+    "target_max_spurious": 0.1,
+    "target_met": true
+  },
+  "section_5_grounding": {
+    "self_consistency_rate": 1.0,
+    "self_consistency_tested": 454,
+    "self_consistency_passed": 454,
+    "adversarial_rejection_rate": 1.0,
+    "adversarial_tested": 33,
+    "adversarial_rejected": 33,
+    "benign_acceptance_rate": 1.0,
+    "benign_tested": 16,
+    "benign_accepted": 16,
+    "false_rejections": [],
+    "llm_scenarios": [
+      {
+        "scenario": "scripted_good_response",
+        "source": "llm",
+        "attempts": 1,
+        "fallback_reason": null
+      },
+      {
+        "scenario": "hallucinated_response",
+        "source": "template",
+        "attempts": 2,
+        "fallback_reason": "verification_failed"
+      },
+      {
+        "scenario": "malformed_json",
+        "source": "template",
+        "attempts": 2,
+        "fallback_reason": "json_parse_error: Expecting value: line 1 column 1 (char 0)"
+      },
+      {
+        "scenario": "http_500_error",
+        "source": "template",
+        "attempts": 1,
+        "fallback_reason": "llm_call_error: Server error '500 Internal Server Error' for url 'https://api.anthropic.com/v1/messages'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500"
+      }
+    ],
+    "target_met": true
+  },
+  "section_6_robustness": {
+    "cases": [
+      {
+        "case": "messy.csv (normal upload)",
+        "status": 200,
+        "message": "Ingest counts match ground truth: duplicates=3, rejected=4, missing_price=2",
+        "passed": true
+      },
+      {
+        "case": "header_only.csv",
+        "status": 422,
+        "message": "no orders found",
+        "passed": true
+      },
+      {
+        "case": "missing_price_column.csv",
+        "status": 422,
+        "message": "Schema mismatch: missing required columns: ['price']",
+        "passed": true
+      },
+      {
+        "case": "binary_bytes.bin",
+        "status": 422,
+        "message": "Invalid file format. Only CSV files (.csv or text/csv) are accepted.",
+        "passed": true
+      },
+      {
+        "case": "file_with_20001_rows.csv",
+        "status": 422,
+        "message": "File contains 20002 rows, which exceeds the limit of 20000 rows.",
+        "passed": true
+      }
+    ],
+    "no_500s": true,
+    "target_met": true
+  },
+  "section_7_stability": {
+    "facts_matches": [
+      {
+        "dataset": "clean",
+        "byte_identical": true
+      },
+      {
+        "dataset": "single_holding_losers",
+        "byte_identical": true
+      },
+      {
+        "dataset": "single_revenge_trading",
+        "byte_identical": true
+      },
+      {
+        "dataset": "single_overtrading",
+        "byte_identical": true
+      },
+      {
+        "dataset": "single_oversizing",
+        "byte_identical": true
+      },
+      {
+        "dataset": "single_averaging_down",
+        "byte_identical": true
+      },
+      {
+        "dataset": "mixed",
+        "byte_identical": true
+      },
+      {
+        "dataset": "messy",
+        "byte_identical": true
+      }
+    ],
+    "facts_identical_rate": 1.0,
+    "endpoint_matches": [
+      {
+        "dataset": "clean",
+        "identical": true
+      },
+      {
+        "dataset": "single_holding_losers",
+        "identical": true
+      },
+      {
+        "dataset": "single_revenge_trading",
+        "identical": true
+      },
+      {
+        "dataset": "single_overtrading",
+        "identical": true
+      },
+      {
+        "dataset": "single_oversizing",
+        "identical": true
+      },
+      {
+        "dataset": "single_averaging_down",
+        "identical": true
+      },
+      {
+        "dataset": "mixed",
+        "identical": true
+      },
+      {
+        "dataset": "messy",
+        "identical": true
+      }
+    ],
+    "endpoint_identical_rate": 1.0,
+    "target_met": true
+  },
+  "section_8_fallback": {
+    "dataset_results": [
+      {
+        "dataset": "clean",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": null
+      },
+      {
+        "dataset": "single_holding_losers",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      },
+      {
+        "dataset": "single_revenge_trading",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      },
+      {
+        "dataset": "single_overtrading",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      },
+      {
+        "dataset": "single_oversizing",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      },
+      {
+        "dataset": "single_averaging_down",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      },
+      {
+        "dataset": "mixed",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      },
+      {
+        "dataset": "messy",
+        "source": "template",
+        "verified": true,
+        "fallback_reason": "no_llm_key"
+      }
+    ],
+    "http_calls_made": 0,
+    "target_max_calls": 0,
+    "target_met": true
+  },
+  "section_9_limitations": {
+    "synthetic_author_parity": "Datasets are synthetic and generated by the same codebase author as the detectors. These evaluations prove that the detectors reliably recover what the generator plants, not that real-world retail options traders behave in this exact parametric manner.",
+    "forced_loss_flattery": {
+      "description": "Planted loss habits are artificially forced to be losing trades in several generator methods, which guarantees a clean distinction between baseline trades and habit-induced trades, flattering cost ratios.",
+      "affected_habits": [
+        "holding_losers: extends hold time specifically for trades already destined to lose, ensuring extended losers have larger losses.",
+        "revenge_trading: explicitly overrides pnl_inr to a forced negative loss on re-entries following losing trades.",
+        "overtrading: explicitly forces trades above the daily baseline volume threshold to be losing trades.",
+        "oversizing: explicitly forces position sizes following two consecutive wins or losses to result in losing trades.",
+        "averaging_down: samples exclusively from losing positions and injects lower-priced add-on orders that exit at a net loss."
+      ]
+    },
+    "gross_pnl_lower_bounds": "All calculations rely purely on gross P&L (exit price minus entry price times quantity). Brokerage charges, Securities Transaction Tax (STT), exchange turnover fees, and GST are not included. Reported habit costs therefore represent strict lower bounds on the total capital destroyed.",
+    "proportional_overlap_approximation": "Portfolio overlap attribution is computed using a proportional-by-count approximation (attributed_cost_inr = estimated_cost_inr * (1 - overlap_share)), not an exact combinatorial per-trade attribution. This provides a deterministic, transparent adjustment but remains a heuristic approximation.",
+    "confidence_semantics": "Confidence scores reflect evidence volume and behavioral extremity (e.g., hold-time ratios, cooldown violation speed), not a frequentist or Bayesian probability of recurrence.",
+    "threshold_calibration_history": [
+      "holding_losers 5a: replaced mean ratio with median ratio (flagged_median_hold / median_winner_hold) to ensure resistance to outliers.",
+      "oversizing: derived position thresholds dynamically from trader's median lot size instead of hardcoded 2 lots.",
+      "holding_losers confidence: corrected to compare flagged losers' median hold against winning trades rather than all losers."
+    ]
+  }
+}

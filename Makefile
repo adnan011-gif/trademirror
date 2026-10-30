@@ -22,5 +22,6 @@ data:
 	$(VENV)/python -m data.generator --all
 
 eval:
-	@echo "not implemented"
+	PYTHONPATH=.:backend $(VENV)/python -m evals.harness
+
 

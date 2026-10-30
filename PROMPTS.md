@@ -1744,4 +1744,65 @@ harness and results" and push to origin main. Show me `git status` and
 
 Result: worked. Implemented evaluation harness in evals/harness.py running across all 9 sections and 590+ trading months with fixed asserted target constants. All targets met: 0% clean kept rate (target <= 2%), medium/high habit intensity recovery >= 85% and cost ratios within 0.5–2.0, 1.08% combinations spurious rate (target <= 10%), 100% template self-consistency, 100% adversarial rejection across 33 mutations, 100% benign acceptance across 16 variants, 0 500s across messy and corrupted boundary inputs, 100% facts determinism and endpoint parity, and 0 HTTP calls in fallback mode. Generated deterministic evals/results/results.md and results.json without embedded timestamps. Added make eval target and README Evals section. Full suite passes in ~14 seconds with zero network calls.
 
+## Prompt 11: Docker and Render deployment
+
+Step 11: single-service deployment. Do not touch detectors, ranking, narrative, verifier,
+API logic, frontend source, the generator, committed datasets, or evals. If something
+unexpected comes up, STOP and report. In your final summary list every file changed.
+
+FILES: Dockerfile, .dockerignore, render.yaml, README.md (deployment section), and
+.env.example only if a setting is missing.
+
+DOCKERFILE (multi-stage)
+- Stage 1: a node image (current LTS) builds /frontend with `npm ci` then `npm run build`.
+- Stage 2: python:3.11-slim. Install the backend dependencies from pyproject.toml (no
+  dev extras), copy backend/, copy the built frontend/dist, and copy ONLY
+  data/datasets/*.csv into the image (not ground_truth, not the generator, not evals,
+  not tests, not .git, not .venv, not node_modules).
+- Run as a non-root user. Set PYTHONUNBUFFERED=1 and PYTHONDONTWRITEBYTECODE=1. Default
+  env in the image: SAMPLES_DIR and FRONTEND_DIST pointing at the copied locations,
+  LLM_PROVIDER=none, TRUST_PROXY=true, TRUSTED_PROXY_HOPS=1.
+- Start with uvicorn on 0.0.0.0 and the port from $PORT (default 8000). One worker.
+- HEALTHCHECK against /api/health.
+- Pin base image versions to specific tags, not `latest`.
+.dockerignore excludes .git, .venv, node_modules, frontend/dist, __pycache__,
+.pytest_cache, .ruff_cache, .env, evals/, docs/, data/ground_truth, and anything else not
+needed at runtime.
+
+RENDER (render.yaml): one web service, runtime docker, free plan, healthCheckPath
+/api/health, autoDeploy on. Environment variables: LLM_PROVIDER, LLM_MODEL, and
+LLM_API_KEY declared with sync: false (set manually in the dashboard, never in the
+file); TRUST_PROXY=true and TRUSTED_PROXY_HOPS=1 as plain values. Do not put any secret
+or key anywhere in the repo.
+
+VERIFY (report each result; if Docker is not installed, say so and run the equivalent
+without Docker: `make build`, then the backend with FRONTEND_DIST and SAMPLES_DIR set
+the same way, and test from there)
+1. `docker build` succeeds; report the image size.
+2. `docker run` with no LLM variables: /api/health ok; "/" serves the app; /api/samples
+   lists 8; /api/sample/mixed returns 3 habits; upload messy.csv returns 9 warnings;
+   an unknown /api path returns JSON 404; a deep link like /results/anything returns the
+   app shell.
+3. Confirm the image contains no ground_truth folder, no .env, no tests, and no generator
+   (run `docker run --rm <image> ls` on the relevant paths).
+4. Confirm the container works with NO write access to the app directory.
+5. Check `docker history` or the layers show no secrets.
+
+README: add a Deployment section: how to deploy on Render step by step (new Web Service
+from the GitHub repo, Docker runtime, free plan), which variables to set, that
+LLM_PROVIDER=none is the default and the app is fully functional without a key, the
+free-tier cold start (about 30 to 60 seconds after idle), and a placeholder line
+"Live URL: <to be added after deploy>". Also add a short "Running the evals" pointer.
+
+PROMPTS.md: append this prompt verbatim as "## Prompt 11: Docker and Render deployment"
+with a "Result:" line. Do not tidy my wording.
+
+GIT: when the Docker verification above passes and `make test` and `ruff check .` pass,
+commit "chore(deploy): single-service Docker and Render config" and push to origin main.
+Show me `git status` and `git log --oneline -3`. Never commit .env, API keys, or
+node_modules.
+
+Result: worked. Created multi-stage Dockerfile (node:20.18.0-alpine3.20 and python:3.11.10-slim-bookworm) with non-root appuser, python-based /api/health healthcheck, and uvicorn runner on $PORT. Configured .dockerignore to exclude dev and ground-truth assets, and render.yaml with sync:false LLM variables. Docker daemon is not installed on host; executed full equivalent verification via make build and TestClient with FRONTEND_DIST/SAMPLES_DIR: verified /api/health, root app shell, 8 samples, mixed sample habits, messy.csv upload with 9 warnings, JSON 404 on unknown /api path, deep link routing, zero disk writes, and zero secrets. Updated README.md and .env.example. All tests pass, ruff clean.
+
+
 

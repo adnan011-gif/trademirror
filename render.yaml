@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: trademirror
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: TRUST_PROXY
+        value: "true"
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false

@@ -51,4 +51,41 @@ The evaluation harness (`evals/harness.py`, executable via `make eval`) validate
    - *Proportional overlap attribution*: Portfolio overlap is estimated proportionally by trade count rather than an exact combinatorial per-trade attribution.
    - *Confidence semantics*: Confidence scores represent evidence volume and behavioral extremity, not calibrated Bayesian probabilities.
 
+### Running the Evals
 
+To execute the complete evaluation suite across all 590+ trading months:
+
+```bash
+make eval
+```
+
+Evaluation results will be regenerated and reported in `evals/results/results.md` and `evals/results/results.json`.
+
+## Deployment
+
+TradeMirror is packaged as a single-service container hosting both the FastAPI backend API and the static React production build.
+
+Live URL: <to be added after deploy>
+
+### Deploying on Render (Step-by-Step)
+
+1. **Create Web Service**:
+   - In the [Render Dashboard](https://dashboard.render.com/), click **New +** and select **Web Service**.
+   - Connect your GitHub repository (`trademirror`).
+2. **Select Runtime & Plan**:
+   - Environment / Runtime: **Docker**.
+   - Plan: **Free**.
+   - Render will automatically discover and use `render.yaml` and `Dockerfile`.
+3. **Configure Environment Variables**:
+   - `TRUST_PROXY`: `true` (configured in `render.yaml` for reverse proxy header handling).
+   - `TRUSTED_PROXY_HOPS`: `1` (configured in `render.yaml`).
+   - *(Optional)* LLM Narrative Enhancement:
+     - `LLM_PROVIDER`: `anthropic` or `openai` (default is `none`).
+     - `LLM_MODEL`: `claude-3-5-sonnet-latest` or `gpt-4o-mini`.
+     - `LLM_API_KEY`: Your secret API key (marked `sync: false` in `render.yaml`, set manually in dashboard).
+   - **Zero-Key Default**: `LLM_PROVIDER=none` is the default setting. TradeMirror is fully functional without any external LLM keys or network dependencies, generating verified, deterministic template narratives.
+4. **Deploy**:
+   - Click **Create Web Service**.
+   - Health checks automatically monitor `/api/health`.
+5. **Free-Tier Cold Starts**:
+   - On the Render Free plan, the service spins down after 15 minutes of inactivity. The first request after an idle period may experience a cold-start delay of approximately 30 to 60 seconds while the container initializes. Subsequent requests respond instantly.

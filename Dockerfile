@@ -25,9 +25,11 @@ ENV PYTHONUNBUFFERED=1 \
     TRUST_PROXY=true \
     TRUSTED_PROXY_HOPS=1
 
-# Install backend dependencies without dev extras
+# Extract and install runtime dependencies from pyproject.toml (no dev extras, no package discovery)
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+RUN python3 -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; open('/tmp/requirements.txt', 'w').write('\n'.join(deps) + '\n')" \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # Copy application source
 COPY backend/app /app/app

@@ -1804,5 +1804,50 @@ node_modules.
 
 Result: worked. Created multi-stage Dockerfile (node:20.18.0-alpine3.20 and python:3.11.10-slim-bookworm) with non-root appuser, python-based /api/health healthcheck, and uvicorn runner on $PORT. Configured .dockerignore to exclude dev and ground-truth assets, and render.yaml with sync:false LLM variables. Docker daemon is not installed on host; executed full equivalent verification via make build and TestClient with FRONTEND_DIST/SAMPLES_DIR: verified /api/health, root app shell, 8 samples, mixed sample habits, messy.csv upload with 9 warnings, JSON 404 on unknown /api path, deep link routing, zero disk writes, and zero secrets. Updated README.md and .env.example. All tests pass, ruff clean.
 
+## Prompt 11b: robust Docker install
+
+Step 11b: make the Docker dependency install robust, and prove it without Docker.
+Do not touch anything outside Dockerfile, .dockerignore, pyproject.toml, README.md
+(deployment section only), PROMPTS.md. If something unexpected comes up, STOP and
+report. List every file changed.
+
+1) Print lines 25-40 of the Dockerfile and the install command it uses. State whether it
+   runs `pip install .`, `pip install -e .`, or something else.
+
+2) Remove `readme = "README.md"` from pyproject.toml (the image does not ship README.md,
+   and the file is not needed at runtime). Do not change dependencies or tool settings.
+
+3) The runtime install must NOT depend on package discovery or on any file other than
+   pyproject.toml. Implement it by extracting the dependency list from pyproject.toml
+   with Python's tomllib inside the Dockerfile (for example: a RUN step that writes
+   [project].dependencies to /tmp/requirements.txt, then `pip install --no-cache-dir -r
+   /tmp/requirements.txt`). Do not install dev extras. Do not use `pip install .`.
+
+4) Prove it without Docker. Create a fresh temporary directory containing ONLY the files
+   the image copies (pyproject.toml, backend/app as app/, frontend/dist, data/datasets/
+   *.csv). In a brand-new virtualenv (python 3.11) outside the repo, run the exact
+   dependency extraction command from the Dockerfile, install the requirements, then
+   start uvicorn from that temp directory with SAMPLES_DIR, FRONTEND_DIST,
+   LLM_PROVIDER=none, TRUST_PROXY=true. Report: /api/health, "/" returns the app shell,
+   /api/samples lists 8, /api/sample/mixed returns 3 habits, upload of messy.csv returns
+   9 warnings. Confirm the temp directory contains no ground_truth, no generator, no
+   .env, no tests. If any import fails because a dependency is missing from
+   pyproject.toml, STOP and tell me which; do not work around it.
+
+5) Check that every dependency used by the runtime code is declared under
+   [project].dependencies and not only in dev extras (for example python-multipart,
+   pydantic-settings, httpx, uvicorn). Print the final runtime dependency list.
+
+PROMPTS.md: append this prompt verbatim as "## Prompt 11b: robust Docker install" with a
+"Result:" line. Do not tidy my wording.
+
+GIT: when the temp-directory run passes and `make test` and `ruff check .` pass, commit
+"fix(deploy): install runtime dependencies without package discovery" and push to origin
+main. Show me `git status` and `git log --oneline -3`. Never commit .env, API keys, or
+node_modules.
+
+Result: worked. Removed readme = "README.md" from pyproject.toml. Replaced pip install . with tomllib-based dependency extraction into /tmp/requirements.txt followed by pip install -r /tmp/requirements.txt (without package discovery or dev extras). Verified without Docker in fresh temporary directory containing only image-copied assets (/tmp/trademirror_isolated_app) and a fresh Python 3.11 virtualenv: verified zero presence of ground_truth, generator, .env, or tests; uvicorn started and passed /api/health (200), root app shell (200), 8 samples listed, mixed sample diagnosed 3 habits, and messy.csv upload returned 9 warnings. Confirmed all runtime dependencies declared under [project].dependencies. All tests and ruff clean.
+
+
 
 

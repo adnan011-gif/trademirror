@@ -2,7 +2,6 @@
 name = "trademirror"
 version = "0.1.0"
 description = "Post-trade behavioural habit review tool for retail F&O traders in India"
-readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.110.0",

@@ -1887,7 +1887,45 @@ GIT: when `make eval`, `make test`, and `ruff check .` pass, commit "docs(evals)
 limitations, per-habit combination recall" and push to origin main. Show `git status` and
 `git log --oneline -3`. Never commit .env, API keys, or node_modules.
 
-Result: worked. Corrected limitation 6 with accurate history covering holding_losers MEDIAN_RATIO_MIN lowering, revenge_trading lots check, holding_losers confidence formula, generator overtrading/messy fixes, and narrative verifier refinements. Limitation 2 dynamically computes averaging_down winning add-on share (17.6%). Section 1 formats N/A for clean row. Section 4 includes per-habit combination recall table. Two consecutive make eval runs produce byte-identical results. Commit hash records HEAD of code under test. All tests pass, ruff clean.
+
+## Prompt 12: add live URL to README
+
+Step 12: add the live URL to the README. Touch only README.md and PROMPTS.md. If
+anything unexpected comes up, STOP and report. List every file changed.
+
+1) In README.md, find the line "Live URL: <to be added after deploy>" (or the equivalent
+   placeholder in the Deployment section) and replace it with:
+   Live URL: https://trademirror-95rw.onrender.com
+   If the README has no such line, add it directly under the title and one-paragraph
+   problem statement.
+
+2) Directly beneath it add these lines, with no other wording changes:
+   Code: https://github.com/adnan011-gif/trademirror
+   Note: the app runs on Render's free tier. After a period of inactivity the first
+   request can take 30 to 60 seconds while the server wakes up.
+   Prompts used to build it: PROMPTS.md
+   Evals and results: evals/results/results.md
+
+   Do not add any other claims, badges, or screenshots. If the README already contains
+   a cold-start note, do not duplicate it; keep one.
+
+3) Verify the link is live before committing: run
+   curl -s -o /dev/null -w "%{http_code}\n" https://trademirror-95rw.onrender.com/api/health
+   and report the status code and body of /api/health. If it is not 200, wait 60 seconds
+   and retry once (the free instance may be asleep), then report what you saw. If it is
+   still not 200, STOP and do not commit.
+
+4) Confirm that the README has no leftover placeholders: grep for "<to be added", "TODO",
+   and "<MY_USERNAME>" and report the results.
+
+PROMPTS.md: append this prompt verbatim as "## Prompt 12: add live URL to README" with a
+"Result:" line. Do not tidy my wording.
+
+GIT: commit "docs: add live URL" and push to origin main. Show me `git status` and
+`git log --oneline -3`. Never commit .env, API keys, or node_modules.
+
+Result: worked. Added live URL, repo link, Render free-tier cold start note, PROMPTS.md pointer, and evals pointer to README.md. Deduplicated cold start note. Verified live deployment via curl returning HTTP 200 and {"status":"ok"}. Confirmed zero leftover placeholders in README.md. Committed and pushed to origin main.
+
 
 
 

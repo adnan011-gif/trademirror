@@ -65,7 +65,12 @@ Evaluation results will be regenerated and reported in `evals/results/results.md
 
 TradeMirror is packaged as a single-service container hosting both the FastAPI backend API and the static React production build.
 
-Live URL: <to be added after deploy>
+Live URL: https://trademirror-95rw.onrender.com
+Code: https://github.com/adnan011-gif/trademirror
+Note: the app runs on Render's free tier. After a period of inactivity the first
+request can take 30 to 60 seconds while the server wakes up.
+Prompts used to build it: PROMPTS.md
+Evals and results: evals/results/results.md
 
 ### Deploying on Render (Step-by-Step)
 
@@ -87,5 +92,3 @@ Live URL: <to be added after deploy>
 4. **Deploy**:
    - Click **Create Web Service**.
    - Health checks automatically monitor `/api/health`.
-5. **Free-Tier Cold Starts**:
-   - On the Render Free plan, the service spins down after 15 minutes of inactivity. The first request after an idle period may experience a cold-start delay of approximately 30 to 60 seconds while the container initializes. Subsequent requests respond instantly.

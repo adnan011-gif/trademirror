@@ -1,6 +1,6 @@
 # TradeMirror Evaluation Report
 
-- **Commit**: `dda021cc5026149bae4f4adfb2217f30faba2e93`
+- **Commit**: `73af5d5bf4c24e86d152f093196323f70c4bd985`
 - **Run Date**: 2026-10-30
 - **Seed Ranges**: Clean: `2000-2099`, Intensity: `2100-2549`, Combinations: `2600-2639`
 
@@ -22,7 +22,7 @@
 
 | Dataset | Planted Habit | Precision | Recall | Est Cost (₹) | Injected Loss (₹) | Cost Ratio | Conf | Rank |
 |---|---|---|---|---|---|---|---|---|
-| `clean` | `none (clean)` | 1.00 | 1.00 | ₹0.00 | ₹0.00 | 1.00 | 0.00 | none |
+| `clean` | `none (clean)` | N/A | N/A | ₹0.00 | ₹0.00 | N/A | 0.00 | none |
 | `single_holding_losers` | `holding_losers` | 1.00 | 1.00 | ₹56,518.88 | ₹51,028.80 | 1.11 | 1.00 | 1 |
 | `single_revenge_trading` | `revenge_trading` | 1.00 | 0.92 | ₹87,898.20 | ₹91,213.20 | 0.96 | 1.00 | 1 |
 | `single_overtrading` | `overtrading` | 1.00 | 0.78 | ₹34,666.50 | ₹44,886.75 | 0.77 | 0.75 | 1 |
@@ -73,6 +73,16 @@
 - **Planted-Habit Recall**: 87.6%
 - **Spurious-Habit Rate**: 1.08% [Target: <= 10.0%]
 - **Top-Ranked Equals Largest Injected Loss**: 82.5%
+
+### Per-Habit Combination Recall
+
+| Habit | Times Planted | Times Detected | Recall |
+|---|---|---|---|
+| `holding_losers` | 24 | 13 | 54.2% |
+| `revenge_trading` | 16 | 16 | 100.0% |
+| `overtrading` | 21 | 20 | 95.2% |
+| `oversizing` | 26 | 25 | 96.2% |
+| `averaging_down` | 18 | 18 | 100.0% |
 
 ## 5. Grounding of the Narrative
 
@@ -126,11 +136,13 @@
    - revenge_trading: explicitly overrides pnl_inr to a forced negative loss on re-entries following losing trades.
    - overtrading: explicitly forces trades above the daily baseline volume threshold to be losing trades.
    - oversizing: explicitly forces position sizes following two consecutive wins or losses to result in losing trades.
-   - averaging_down: samples exclusively from losing positions and injects lower-priced add-on orders that exit at a net loss.
+   - averaging_down: add-on legs are planted on already-losing trades and usually, but not always, finish at a loss (17.6% of planted add-on trades won in the committed dataset, 3 of 17).
 3. **Gross P&L Lower Bounds**: All calculations rely purely on gross P&L (exit price minus entry price times quantity). Brokerage charges, Securities Transaction Tax (STT), exchange turnover fees, and GST are not included. Reported habit costs therefore represent strict lower bounds on the total capital destroyed.
 4. **Proportional Overlap Attribution**: Portfolio overlap attribution is computed using a proportional-by-count approximation (attributed_cost_inr = estimated_cost_inr * (1 - overlap_share)), not an exact combinatorial per-trade attribution. This provides a deterministic, transparent adjustment but remains a heuristic approximation.
 5. **Confidence Semantics**: Confidence scores reflect evidence volume and behavioral extremity (e.g., hold-time ratios, cooldown violation speed), not a frequentist or Bayesian probability of recurrence.
 6. **Threshold Calibration History**:
-   - holding_losers 5a: replaced mean ratio with median ratio (flagged_median_hold / median_winner_hold) to ensure resistance to outliers.
-   - oversizing: derived position thresholds dynamically from trader's median lot size instead of hardcoded 2 lots.
-   - holding_losers confidence: corrected to compare flagged losers' median hold against winning trades rather than all losers.
+   - holding_losers MEDIAN_RATIO_MIN: specified as 1.5, lowered to 1.10 after the first run showed planted data had a median ratio of about 1.19 (post-hoc, step 5a).
+   - revenge_trading size condition: changed from raw quantity to lots after cross-instrument false flags on mixed.csv (step 5c-fix).
+   - holding_losers confidence formula: changed to use the flagged trades' median hold after planted months were dropped by the evidence bar (step 6b); detection and cost were verified identical.
+   - generator fixes: overtrading planted days adjusted so they exceed 2x the median (low intensity now means exactly the detector's 2-day minimum), and the messy dataset's missing-price rows changed to unexecuted attempts.
+   - narrative layer: unsupported-claim terms blocked and rules derived from trader data (steps 7b, 7c), which changed wording only.

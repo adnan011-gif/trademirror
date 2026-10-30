@@ -1848,6 +1848,48 @@ node_modules.
 
 Result: worked. Removed readme = "README.md" from pyproject.toml. Replaced pip install . with tomllib-based dependency extraction into /tmp/requirements.txt followed by pip install -r /tmp/requirements.txt (without package discovery or dev extras). Verified without Docker in fresh temporary directory containing only image-copied assets (/tmp/trademirror_isolated_app) and a fresh Python 3.11 virtualenv: verified zero presence of ground_truth, generator, .env, or tests; uvicorn started and passed /api/health (200), root app shell (200), 8 samples listed, mixed sample diagnosed 3 habits, and messy.csv upload returned 9 warnings. Confirmed all runtime dependencies declared under [project].dependencies. All tests and ruff clean.
 
+## Prompt 10b: correct limitations text
+
+Step 10b: correct the fixed text in the Known Limitations section of evals/harness.py
+and regenerate results. Do not change any target, threshold, detector, generator, or
+dataset. If something unexpected comes up, STOP and report. List every file changed.
+
+1) Replace limitation 6 with an accurate history, checked against `git log` and
+   PROMPTS.md. It must include, in plain words:
+   - holding_losers MEDIAN_RATIO_MIN: specified as 1.5, lowered to 1.10 after the first
+     run showed planted data had a median ratio of about 1.19 (post-hoc, step 5a)
+   - revenge_trading size condition changed from raw quantity to lots after cross-
+     instrument false flags on mixed.csv (step 5c-fix)
+   - holding_losers confidence formula changed to use the flagged trades' median hold
+     after planted months were dropped by the evidence bar (step 6b); detection and cost
+     were verified identical
+   - generator fixes: overtrading planted days adjusted so they exceed 2x the median
+     (low intensity now means exactly the detector's 2-day minimum), and the messy
+     dataset's missing-price rows changed to unexecuted attempts
+   - narrative layer: unsupported-claim terms blocked and rules derived from trader data
+     (steps 7b, 7c), which changed wording only
+   Remove the inaccurate lines about "mean ratio replaced with median ratio" and
+   "oversizing thresholds derived from median lot size".
+2) Limitation 2: change the averaging_down line to say add-on legs are planted on
+   already-losing trades and usually, but not always, finish at a loss (state the share
+   that won in the committed dataset, computed, not typed).
+3) Section 1: print N/A (not 1.00) for precision, recall, and cost ratio on the clean
+   row.
+4) Add a per-habit recall table to Section 4 (recall of each planted habit across the 40
+   combination months, plus how many times each was planted).
+5) Run `make eval` twice and diff results.md and results.json; report that only the run
+   date line differs. Record the commit hash of the code under test, not its parent.
+
+PROMPTS.md: append this prompt verbatim as "## Prompt 10b: correct limitations text" with
+a "Result:" line. Do not tidy my wording.
+
+GIT: when `make eval`, `make test`, and `ruff check .` pass, commit "docs(evals): accurate
+limitations, per-habit combination recall" and push to origin main. Show `git status` and
+`git log --oneline -3`. Never commit .env, API keys, or node_modules.
+
+Result: worked. Corrected limitation 6 with accurate history covering holding_losers MEDIAN_RATIO_MIN lowering, revenge_trading lots check, holding_losers confidence formula, generator overtrading/messy fixes, and narrative verifier refinements. Limitation 2 dynamically computes averaging_down winning add-on share (17.6%). Section 1 formats N/A for clean row. Section 4 includes per-habit combination recall table. Two consecutive make eval runs produce byte-identical results. Commit hash records HEAD of code under test. All tests pass, ruff clean.
+
+
 
 
 
